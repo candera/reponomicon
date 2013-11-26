@@ -35,6 +35,17 @@ In a perfect world:
 - Has a good story for ClojureScript/JavaScript integration, whatever
   that means.
 - Data all the things - everything should be data where possible.
+- Provide branching and merging of content
+  - Perhaps store the content directly in git soas to leverage its
+    abilities in this area. Datomic could still store metadata
+  - What advantages at this point over just having a GitHub wiki?
+    - Inclusion of executable code, for one
+- Provide a convenient way to promote content through environments
+  - This might be a feature of branching/merging
+  - Might need to be able to easily promote across physical
+    environments, though, if separate storages are dictated
+    - That's possibly a problem to leave for later
+
 
 * What do I need to look at?
 
