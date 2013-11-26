@@ -1,0 +1,53 @@
+* What is this thing?
+
+It's maybe something like a wiki, only with Clojurey bits. I have a
+grander vision of it being a self-modifying web app, but that's a
+bigger goal than it just being a wikilike thing.
+
+* What's the deal with the name?
+
+> 1. Ingenious and complex in design or function; intricate.
+> 2. Finely or skillfully made or employed; artistic.
+
+Which is both something to aspire to and also a pun on the fact that
+the results of my efforts are likely to be complex rather than simple.
+
+* What are the core ideas?
+
+That is an excellent question, that I unfortunately do not yet have an
+answer to.
+
+* What do I want it to do?
+
+In a perfect world:
+
+- Store data in a location of the user's choice. Default Datomic, but
+  also file system, and possibly git repo.
+  - Publishing changes by pushing would be cool.
+- Uses GitHub-flavored Markdown, or a compatible super- or subset.
+  - I sort of like the idea of metadata going in HTTP-style headers
+- Allows you to use other formats
+- Always has extensibility points for injecting code
+- Runs code in something like CloJail, or otherwise has a model for
+  only authorized users being able to add code.
+- Is nice enough that we could use it for the things that Michael
+  likes to use middleman for.
+- Has a good story for ClojureScript/JavaScript integration, whatever
+  that means.
+- Data all the things - everything should be data where possible.
+
+* What do I need to look at?
+
+- Middleman
+  - The syntax for integrating code
+  - What features it provides
+- Flexwiki
+  - The syntax for integrating code
+  - How layouts were specified
+- Markdown
+  - Especially GitHub-flavored markdown
+  - What are the bits of syntax we can pervert to our own ends but
+    still have something reasonable rendered?
+    - E.g. can we do something like =```clojure exec= and still get
+      clojure highlighting?
+
