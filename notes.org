@@ -62,3 +62,105 @@ In a perfect world:
     - E.g. can we do something like =```clojure exec= and still get
       clojure highlighting?
 
+* Middleman notes
+
+- Has templates for getting started
+  - a la Rails generators, I think
+- Has "extensions", whatever those are
+  - Extensions can contribute templates
+- Uses file naming conventions to separate template language from
+  output format
+  - Not sure what I think of that. It doesn't feel primitive.
+- The main supported template language seems to be ERb.
+- HAML is also supported, and I think Michael likes it better.
+
+* ERb notes
+
+- Is it as simple as just supporting <% %> and <%= %> ?
+  - No, it's more complicated than that
+- Docs [[http://www.ruby-doc.org/stdlib-2.0.0/libdoc/erb/rdoc/ERB.html][here]].
+- Also has comment syntax, which seems important.
+- Obviously, an escape sequence is also important. Erb uses <%% and %%>
+
+* HAML notes
+
+- Emphasizes readability of markup
+  - Partly by relying on whitespace instead of close tags
+- Has a convenient way to combine running code and emitting it inside
+  a tag: %strong= item.title
+- Supports attributes as maps, which I find somewhat uglier, but still
+  workable
+- Seems strongly tied to Ruby, but then again I'm thinking of tying to
+  Clojure.
+- Supports shorthand for emitting ID and class via the classic # and .
+  mechanism.
+- Defaults to <div> element
+
+* Random idea parking lot
+
+- Something akin to macro expansion - a data model for pages that has
+  an extension point so that it can recursively expend into the base
+  information model.
+- It would be great if whatever this is were amenable to both static
+  and dynamic sites.
+- Designer support should be very good. What does this mean? That
+  there be a way to integrate Compass/SASS? Something more?
+  - It seems like it might be important to use exactly those tools if
+    the support comes from the ability to control the markup, rath
+- If the primitive format is something other than text, we will need
+  to preserve whitespace and comments in the serialized form.
+- For formats that don't support it, metadata is at the start of the
+  file, as name: value pairs, with a blank line separating. Start with
+  a blank line to indicate a desire for no metadata.
+- Maybe the model should be that whatever markup syntax we use, if its
+  value is a string (or maybe a vector), then it should render
+  literally. But if it's a function, then the function should be
+  executed. That would allow us to save some of the work during page
+  parsing, because the presence of a <% (or whatever) block could
+  trigger emission of a function instead of a literal.
+  - Or maybe it should be a sequence of things, where some things
+    render as literals and some render as functions. Or records
+    implementing some protocol or something. Actually, I like the
+    protocol idea - should give us a nice information model.
+  - An interesting litmus test: can we have inclusion? Like, can one
+    topic include another? Could I write my docs as a wiki, where the
+    doc page has something like <%(include "comments/foo")%> and the
+    content for =comments/foo= gets pulled in?
+- It really would be nice to support git as a backend. I'm not sure
+  whether we would need to have that be git+Datomic or just git. It
+  seems like it would be good to have one or the other, since
+  operationally having to have both is less than awesome.
+  - Question: is there a difference between content and code? And are
+    both managed by the system?
+  - If we do have a Datomic component, presumably it needs the same
+    sort of things that git has - a tree of trees, with mutable
+    pointers to places in the tree.
+  - Can we separate the git aspect from the storage aspect? I.e. could
+    we have a component whose job it was just to sync to/from git, but
+    the local filesystem would be the store? That seems sort of messy,
+    especially in the face of the need to reconcile conflicts.
+  - Seems like the easiest thing is just to have a Datomic back end,
+    use the git model, and later maybe allow content to live in git.
+  - Especially since it doesn't look like there's any way to have a
+    programmatic interface to a git repo - you have to land files on
+    disk.
+  - Maybe there needs to be a way to "symlink" in a namespace, which
+    is a git repo with content, and the rest of the content can live
+    in files or Datomic or wherever. That's a lot like FlexWiki's
+    "Federations" idea.
+- I think one big mistake we made with FlexWiki was in having a
+  separate configuration mechanism. It should have been possible to
+  edit the configuration as wiki data. Of course, that raises the
+  question, if the data lives in Datomic, is the URI configuration
+  data, and if so how does the application bootstrap? Or maybe the
+  location of the configuration database is something that has to be
+  communicated separately, like as a system property.
+  - Or it could be stored on the local filesystem, and the system
+    could ask you to change it if it's not present. That would give a
+    pretty nice startup experience. Assuming we don't run afoul of
+    filesystem permissions. The web server would have to have the
+    ability to write into the configuration directory.
+- What do we think of the convention in FlexWiki of having metatopics
+  prefixed with an underscore?
+- Goal: make a system that stores content in Datomic, using only
+  Markdown, and lets you edit via the Ace editor. See how it feels.
