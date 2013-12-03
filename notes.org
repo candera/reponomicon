@@ -164,3 +164,41 @@ In a perfect world:
   prefixed with an underscore?
 - Goal: make a system that stores content in Datomic, using only
   Markdown, and lets you edit via the Ace editor. See how it feels.
+
+* Prototype 1
+
+** Description
+
+A simple wiki system that stores Markdown content in Datomic and lets
+you edit it.
+
+** URLs
+
+- =/= - redirects to /content/home
+- =/content= - this is where the topics live
+- =/content/foo= - Renders topic foo
+- =/edit?topic=foo= - Edits topic foo
+
+** Tools
+
+- Pedestal
+- [[https://github.com/chameco/Hitman][Hitman]]
+
+* Prototype 2
+
+** Description
+
+An implementation of one of the git protocols backed by Datomic.
+
+** Links
+
+- [[http://git-scm.com/book/en/Git-Internals-Transfer-Protocols][Git Transfer Protocols]]
+- [[http://download.eclipse.org/jgit/docs/latest/apidocs/][JGit]] - Might provide code that can be leveraged to create packfiles
+
+** Open questions
+
+*** TODO Simple or smart transfer protocol?
+*** TODO Can I store the objects elsewhere?
+**** TODO If I do, do I give up anything in the way of query
+**** TODO Maybe combine it with ElasticSearch somehow?
+**** TODO Does using [[http://dustin.sallings.org/2008/12/30/git-alternates.html][git alternates]] help at all?
