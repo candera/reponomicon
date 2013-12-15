@@ -49,20 +49,10 @@ In a perfect world:
 
 * What do I need to look at?
 
-- Middleman
+** TODO Middleman
   - The syntax for integrating code
   - What features it provides
-- Flexwiki
-  - The syntax for integrating code
-  - How layouts were specified
-- Markdown
-  - Especially GitHub-flavored markdown
-  - What are the bits of syntax we can pervert to our own ends but
-    still have something reasonable rendered?
-    - E.g. can we do something like =```clojure exec= and still get
-      clojure highlighting?
-
-* Middleman notes
+*** Notes
 
 - Has templates for getting started
   - a la Rails generators, I think
@@ -74,7 +64,26 @@ In a perfect world:
 - The main supported template language seems to be ERb.
 - HAML is also supported, and I think Michael likes it better.
 
-* ERb notes
+** TODO Flexwiki
+  - The syntax for integrating code
+  - How layouts were specified
+** TODO Markdown
+  - Especially GitHub-flavored markdown
+  - What are the bits of syntax we can pervert to our own ends but
+    still have something reasonable rendered?
+    - E.g. can we do something like =```clojure exec= and still get
+      clojure highlighting?
+
+** TODO [[https://github.com/jgm/gitit][gitit]]
+- A wiki built on top of git. Written in Haskell, interestingly.
+
+** TODO Pandoc
+- What do the extensions to Markdown offer?
+- Can the tool itself be integrated in an interesting way?
+
+
+** TODO ERb
+*** Notes
 
 - Is it as simple as just supporting <% %> and <%= %> ?
   - No, it's more complicated than that
@@ -82,7 +91,8 @@ In a perfect world:
 - Also has comment syntax, which seems important.
 - Obviously, an escape sequence is also important. Erb uses <%% and %%>
 
-* HAML notes
+** TODO HAML
+*** Notes
 
 - Emphasizes readability of markup
   - Partly by relying on whitespace instead of close tags
@@ -165,26 +175,27 @@ In a perfect world:
 - Goal: make a system that stores content in Datomic, using only
   Markdown, and lets you edit via the Ace editor. See how it feels.
 
-* Prototype 1
+* Prototypes
+** Prototype 1
 
-** Description
+*** Description
 
 A simple wiki system that stores Markdown content in Datomic and lets
 you edit it.
 
-** URLs
+*** URLs
 
 - =/= - redirects to /content/home
 - =/content= - this is where the topics live
 - =/content/foo= - Renders topic foo
 - =/edit?topic=foo= - Edits topic foo
 
-** Tools
+*** Tools
 
 - Pedestal
 - [[https://github.com/chameco/Hitman][Hitman]]
 
-** Notes
+*** Notes
 
 If we assume the git model (see [[Prototype 2]]), then we can store the
 existence of items in Datomic, but perhaps not the objects themselves.
@@ -193,7 +204,7 @@ link graphs, table of contents data), that can be stored in Datomic or
 not - it's derived, so it can be recomputed from the source data any
 time.
 
-*** TODO Immutability of derived data
+**** TODO Immutability of derived data
 
 One question this raises is how to deal with the relationship between
 the source data and the derived data. This is only deterministic if
@@ -211,42 +222,42 @@ shown differently to different users based on whether or not they are
 authenticated. Now not only does the output depend on the sources, but
 it depends on the environment as well.
 
-* Prototype 2
+** Prototype 2
 
-** Description
+*** Description
 
 An implementation of one of the git protocols backed by Datomic.
 
-** Links
+*** Links
 
 - [[http://git-scm.com/book/en/Git-Internals-Transfer-Protocols][Git Transfer Protocols]]
 - [[http://download.eclipse.org/jgit/docs/latest/apidocs/][JGit]] - Might provide code that can be leveraged to create packfiles
 - [[https://github.com/git/git/blob/master/Documentation/technical/http-protocol.txt][The Git Protocol Documentation]]
 
-** Open questions
+*** Open questions
 
-*** DONE Simple or smart transfer protocol?
+**** DONE Simple or smart transfer protocol?
 
 Smart would be better, if we can manage it. The clients all default to
 it.
 
-*** TODO Can I store the objects elsewhere?
-**** TODO If I do, do I give up some aspects in the way of query
+**** TODO Can I store the objects elsewhere?
+***** TODO If I do, do I give up some aspects in the way of query
 
 But only over the parts that are actually stored elsewhere. And
 they're immutable. Which means that there can be copies of them and it
 doesn't cause trouble.
 
-**** TODO Maybe combine it with ElasticSearch somehow?
+***** TODO Maybe combine it with ElasticSearch somehow?
 
 This should be possible because of immutability. I don't know much
 about ElasticSearch, but the objects should be able to be copied to
 wherever it lives, and the answers almost trivially combined with the
 answers obtained from the authoritative source in Datomic.
 
-**** TODO Does using [[http://dustin.sallings.org/2008/12/30/git-alternates.html][git alternates]] help at all?
+***** TODO Does using [[http://dustin.sallings.org/2008/12/30/git-alternates.html][git alternates]] help at all?
 
-** Trace of Git network protocol
+*** Trace of Git network protocol
 
 If I start a local "server" with =nc -l 8888= and run =git clone
 http://localhost:8888=, I get this:
@@ -291,9 +302,54 @@ there's a 0000, then a 00d3, which is the remainder of that line.
 Actually, it looks like things are described in the
 [[https://github.com/git/git/blob/master/Documentation/technical/pack-protocol.txt][protocol]] [[https://github.com/git/git/blob/master/Documentation/technical/http-protocol.txt][documentation]].
 
-I thought maybe
+Let's try a trace from an empty repo:
 
-*** TODO How to represent info?
+=curl -i https://github.com/candera/test1.git/info/refs?service=git-upload-pack=
+
+#+begin_quote
+HTTP/1.1 200 OK
+Date: Sun, 15 Dec 2013 21:43:06 GMT
+Server: Apache
+Expires: Fri, 01 Jan 1980 00:00:00 GMT
+Pragma: no-cache
+Cache-Control: no-cache, max-age=0, must-revalidate
+Transfer-Encoding: chunked
+Content-Type: application/x-git-upload-pack-advertisement
+
+001e# service=git-upload-pack
+00000000
+#+end_quote
+
+So, an empty list of refs.
+
+What if we add a single, empty commit?
+
+=curl -i https://github.com/candera/test1.git/info/refs?service=git-upload-pack=
+
+#+begin_quote
+HTTP/1.1 200 OK
+Date: Sun, 15 Dec 2013 23:00:29 GMT
+Server: Apache
+Expires: Fri, 01 Jan 1980 00:00:00 GMT
+Pragma: no-cache
+Cache-Control: no-cache, max-age=0, must-revalidate
+Transfer-Encoding: chunked
+Content-Type: application/x-git-upload-pack-advertisement
+
+001e# service=git-upload-pack
+000000d349e88f45f319508612b588d9bada36a65bcccd12 HEAD multi_ack
+thin-pack side-band side-band-64k ofs-delta shallow no-progress
+include-tag multi_ack_detailed no-done
+symref=HEAD:refs/heads/master agent=git/1.8.5.1
+003f49e88f45f319508612b588d9bada36a65bcccd12 refs/heads/master
+0000
+#+end_quote
+
+And the only commit is 49e88f45f319508612b588d9bada36a65bcccd12. So it
+looks like the format is 00d3 for the length, then the SHA, then HEAD,
+then a null and a bunch of capabilities.
+
+**** TODO How to represent info?
 
 If we're going to implement a git protocol on top of what's in
 Datomic, does it make sense to store it in the git way? Or to project
@@ -301,12 +357,13 @@ some internal model out via git?
 
 I suspect we're going to find that if we really want to manage
 information via git, we're going to have to conform to the git data
-model completely. Which I'm not that familiar with. I think we could
-probably get away with downloading stuff from some other information
-model, and maybe even modifying it, but that arbitrary modifications
-to a cloned copy would be hard to integrate in some other model.
+model completely. Which I'm not that familiar with, but is probably
+roughly "trees of files". I think we could probably get away with
+downloading stuff from some other information model, and maybe even
+modifying it, but that arbitrary modifications to a cloned copy would
+be hard to integrate in some other model.
 
-*** TODO What is the git information model?
+**** TODO What is the git information model?
 
 A commit contains metadata plus a tree, where a is tree {object |
 tree}. But that's probably too simple a view.
