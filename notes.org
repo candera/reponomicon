@@ -184,6 +184,33 @@ you edit it.
 - Pedestal
 - [[https://github.com/chameco/Hitman][Hitman]]
 
+** Notes
+
+If we assume the git model (see [[Prototype 2]]), then we can store the
+existence of items in Datomic, but perhaps not the objects themselves.
+We can have data *derived* from the objects (e.g. parsed metadata,
+link graphs, table of contents data), that can be stored in Datomic or
+not - it's derived, so it can be recomputed from the source data any
+time.
+
+*** TODO Immutability of derived data
+
+One question this raises is how to deal with the relationship between
+the source data and the derived data. This is only deterministic if
+the logic doesn't change. But that implies somehow tracking the
+characteristics of the code that generated it. If we keep the code in
+the repository as well, then that's fine, but it does mean that we'd
+have to track the version number in the derived data. And possibly
+update derived data when either the source data *or* the generating
+code updates. That might imply that an artifact generated from two
+sources has its own identity and version history, and we'd need a way
+to address it that took that into account.
+
+A similar problem arises with conditionals. For example, if a page is
+shown differently to different users based on whether or not they are
+authenticated. Now not only does the output depend on the sources, but
+it depends on the environment as well.
+
 * Prototype 2
 
 ** Description
@@ -194,11 +221,92 @@ An implementation of one of the git protocols backed by Datomic.
 
 - [[http://git-scm.com/book/en/Git-Internals-Transfer-Protocols][Git Transfer Protocols]]
 - [[http://download.eclipse.org/jgit/docs/latest/apidocs/][JGit]] - Might provide code that can be leveraged to create packfiles
+- [[https://github.com/git/git/blob/master/Documentation/technical/http-protocol.txt][The Git Protocol Documentation]]
 
 ** Open questions
 
-*** TODO Simple or smart transfer protocol?
+*** DONE Simple or smart transfer protocol?
+
+Smart would be better, if we can manage it. The clients all default to
+it.
+
 *** TODO Can I store the objects elsewhere?
-**** TODO If I do, do I give up anything in the way of query
+**** TODO If I do, do I give up some aspects in the way of query
+
+But only over the parts that are actually stored elsewhere. And
+they're immutable. Which means that there can be copies of them and it
+doesn't cause trouble.
+
 **** TODO Maybe combine it with ElasticSearch somehow?
+
+This should be possible because of immutability. I don't know much
+about ElasticSearch, but the objects should be able to be copied to
+wherever it lives, and the answers almost trivially combined with the
+answers obtained from the authoritative source in Datomic.
+
 **** TODO Does using [[http://dustin.sallings.org/2008/12/30/git-alternates.html][git alternates]] help at all?
+
+** Trace of Git network protocol
+
+If I start a local "server" with =nc -l 8888= and run =git clone
+http://localhost:8888=, I get this:
+
+#+begin_quote
+GET /info/refs?service=git-upload-pack HTTP/1.1
+User-Agent: git/1.7.12
+Host: localhost:8888
+Accept: */*
+Pragma: no-cache
+
+#+end_quote
+
+Note the =service=git-upload-pack=, which seems to be the indicator
+for the "smart" protocol. If we do
+
+=curl -i https://github.com/candera/emacs.git/info/refs?service=git-upload-pack=:
+
+#+begin_quote
+HTTP/1.1 200 OK
+Date: Sun, 08 Dec 2013 15:26:15 GMT
+Server: Apache
+Expires: Fri, 01 Jan 1980 00:00:00 GMT
+Pragma: no-cache
+Cache-Control: no-cache, max-age=0, must-revalidate
+Transfer-Encoding: chunked
+Content-Type: application/x-git-upload-pack-advertisement
+
+001e# service=git-upload-pack
+000000d3a0b4d7f22ebeb8558089ce798ac3c50cf99043e5 HEADmulti_ack thin-pack side-band side-band-64k ofs-delta shallow no-progress include-tag multi_ack_detailed no-done symref=HEAD:refs/heads/master agent=git/1.8.5.1
+003fa0b4d7f22ebeb8558089ce798ac3c50cf99043e5 refs/heads/master
+0000
+#+end_quote
+
+So, that looks like a line-oriented protocol, where the first line is
+the length prefix 001e (decimal 30) followed by the comment
+=# service=git-upload-pack=. Which is only 25 characters long. Maybe
+it includes the =0000= from the next line? No, actually, the 001e
+includes the length itself, so that's just the first line. Then
+there's a 0000, then a 00d3, which is the remainder of that line.
+
+Actually, it looks like things are described in the
+[[https://github.com/git/git/blob/master/Documentation/technical/pack-protocol.txt][protocol]] [[https://github.com/git/git/blob/master/Documentation/technical/http-protocol.txt][documentation]].
+
+I thought maybe
+
+*** TODO How to represent info?
+
+If we're going to implement a git protocol on top of what's in
+Datomic, does it make sense to store it in the git way? Or to project
+some internal model out via git?
+
+I suspect we're going to find that if we really want to manage
+information via git, we're going to have to conform to the git data
+model completely. Which I'm not that familiar with. I think we could
+probably get away with downloading stuff from some other information
+model, and maybe even modifying it, but that arbitrary modifications
+to a cloned copy would be hard to integrate in some other model.
+
+*** TODO What is the git information model?
+
+A commit contains metadata plus a tree, where a is tree {object |
+tree}. But that's probably too simple a view.
