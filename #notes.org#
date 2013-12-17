@@ -376,11 +376,17 @@ ref.
 
 What if I push one more commit on a different branch?
 
-#+begin_src shell-script
+#+begin_src sh
   cd /tmp
-  git clone git@github.com:candera/test1
+  git clone git@github.com:candera/test1.git
   cd test1
 #+end_src
 
+#+RESULTS:
+| Cloning  | into            | test1 |
+| Checking | connectivity... | done  |
 
 
+#+begin_src sh
+
+#+end_src
