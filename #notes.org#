@@ -386,7 +386,14 @@ What if I push one more commit on a different branch?
 | Cloning  | into            | test1 |
 | Checking | connectivity... | done  |
 
-
 #+begin_src sh
-
+  # cd /tmp/test1
+  # git checkout -b new
+  # touch README.md
+  # git add .
+  # git commit -m "Adding README"
+  # git push -u origin new
 #+end_src
+
+#+RESULTS:
+
