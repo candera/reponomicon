@@ -11,6 +11,8 @@
                  ;; use Tomcat instead of Jetty:
                  [io.pedestal/pedestal.jetty "0.2.2"]
                  ;; [io.pedestal/pedestal.tomcat "0.2.2"]
+
+                 [com.datomic/datomic-free "0.9.4360"]
                  ]
   :min-lein-version "2.0.0"
   :resource-paths ["config", "resources"]

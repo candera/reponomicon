@@ -376,11 +376,122 @@ ref.
 
 What if I push one more commit on a different branch?
 
-#+begin_src shell-script
+#+begin_src sh
   cd /tmp
-  git clone git@github.com:candera/test1
+  git clone git@github.com:candera/test1.git
   cd test1
 #+end_src
 
+#+RESULTS:
+| Cloning  | into            | test1 |
+| Checking | connectivity... | done  |
 
+#+begin_src sh
+  cd /tmp/test1
+  git checkout -b new
+  touch README.md
+  git add .
+  git commit -m "Adding README"
+  git push -u origin new
+#+end_src
 
+#+RESULTS:
+| #       | On  | branch  | new     |           |       |        |        |     |      |         |
+| nothing | to  | commit, | working | directory | clean |        |        |     |      |         |
+| Branch  | new | set     | up      | to        | track | remote | branch | new | from | origin. |
+
+OK, now let's see what we get when we curl:
+
+#+begin_src sh :results output
+  curl -i https://github.com/candera/test1.git/info/refs?service=git-upload-pack
+#+end_src
+
+#+RESULTS:
+#+begin_example
+HTTP/1.1 200 OK
+Date: Tue, 17 Dec 2013 05:00:05 GMT
+Server: Apache
+Expires: Fri, 01 Jan 1980 00:00:00 GMT
+Pragma: no-cache
+Cache-Control: no-cache, max-age=0, must-revalidate
+Transfer-Encoding: chunked
+Content-Type: application/x-git-upload-pack-advertisement
+
+001e# service=git-upload-pack
+000000d349e88f45f319508612b588d9bada36a65bcccd12 HEAD multi_ack
+ thin-pack side-band side-band-64k ofs-delta shallow no-progress
+ include-tag multi_ack_detailed no-done symref=HEAD:refs/heads/master
+ agent=git/1.8.5.1
+003f49e88f45f319508612b588d9bada36a65bcccd12 refs/heads/master
+003c54d2d53541ca45c45cb2891fac746420e4b88499 refs/heads/new
+0000
+#+end_example
+
+OK, so that seems good. Now, what's the next thing that happens in the
+protocol? I believe that it goes something like this (captured from
+interaction with a different repo):
+
+#+begin_example
+POST https://github.com:443/candera/daedal.git/git-upload-pack HTTP/1.1
+User-Agent: git/1.7.12
+Host: github.com
+Accept-Encoding: deflate, gzip
+Content-Type: application/x-git-upload-pack-request
+Accept: application/x-git-upload-pack-result
+Content-length: 174
+
+006fwant 5d694187bcbd9382b167544c05efd3fdf9ed75e8 multi_ack_detailed
+ no-done side-band-64k thin-pack ofs-delta
+0032want 5d694187bcbd9382b167544c05efd3fdf9ed75e8
+00000009done
+#+end_example
+
+I'm not sure why it lists two want lines. That seems a bit weird. But
+once again it's a list of SHAs, where the first one includes
+capabilities, and then a 0000, and then a terminator. Let's go read
+[[https://github.com/git/git/blob/master/Documentation/technical/pack-protocol.txt][the pack protocol docs]] and [[https://github.com/git/git/blob/master/Documentation/technical/http-protocol.txt][the http protocol docs]].
+
+This is the response:
+
+#+begin_example
+HTTP/1.1 200 OK
+Date: Sun, 15 Dec 2013 17:36:39 GMT
+Server: Apache
+Expires: Fri, 01 Jan 1980 00:00:00 GMT
+Pragma: no-cache
+Cache-Control: no-cache, max-age=0, must-revalidate
+X-Transfer-Encoding: chunked
+Content-Type: application/x-git-upload-pack-result
+Content-length: 13222
+
+0008NAK
+0021Counting objects: 31, done.
+0029Compressing objects:   4% (1/22)
+0085Compressing objects:   9% (2/22)
+Compressing objects:  13% (3/22)
+Compressing objects:  18% (4/22)
+Compressing objects:0081  22% (5/22)
+Compressing objects:  27% (6/22)
+Compressing objects:  31% (7/22)
+Compressing objects:  36% (8/22)
+0029Compressing objects:  40% (9/22)
+002aCompressing objects:  45% (10/22)
+004fCompressing objects:  50% (11/22)
+Compressing objects:  54% (12/22)
+004fCompressing objects:  59% (13/22)
+Compressing objects:  63% (14/22)
+002aCompressing objects:  68% (15/22)
+002aCompressing objects:  72% (16/22)
+004fCompressing objects:  77% (17/22)
+Compressing objects:  81% (18/22)
+002aCompressing objects:  86% (19/22)
+002aCompressing objects:  90% (20/22)
+002aCompressing objects:  95% (21/22)
+002aCompressing objects: 100% (22/22)
+002eCompressing objects: 100% (22/22), done.
+2004PACK <<begin binary crap>>
+#+end_example
+
+Capabilities are listed [[https://github.com/git/git/blob/master/Documentation/technical/protocol-capabilities.txt][here]]. Looks like the control characters are
+indicating the message type, which is part of the =side-band= and
+=side-band-64k= capabilities. Which is sort of neat.
