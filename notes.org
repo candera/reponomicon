@@ -127,6 +127,14 @@ In a perfect world:
 - For formats that don't support it, metadata is at the start of the
   file, as name: value pairs, with a blank line separating. Start with
   a blank line to indicate a desire for no metadata.
+- Should metadata have a schema? For instance, it might be nice to say
+  cardinality many or one, as a way of giving semantics to hierarchies
+  of content, where a topic has metadata that's the same as a parent.
+  But that raises the question: where should metadata schema be kept?
+  And if it's editable by the user, then what happens if they make a
+  change that invalidates content in the wiki? And again, what about
+  history? If I change schema, what does it mean about values for
+  those metadata types in the past?
 - Maybe the model should be that whatever markup syntax we use, if its
   value is a string (or maybe a vector), then it should render
   literally. But if it's a function, then the function should be
@@ -179,6 +187,7 @@ In a perfect world:
   prefixed with an underscore?
 - Goal: make a system that stores content in Datomic, using only
   Markdown, and lets you edit via the Ace editor. See how it feels.
+
 
 * Prototypes
 ** Prototype 1 (SimpleWiki)
@@ -280,6 +289,67 @@ be hard to integrate in some other model.
 
 A commit contains metadata plus a tree, where a is tree {object |
 tree}. But that's probably too simple a view.
+
+
+**** TODO Should I use the codeq attributes?
+On the one hand, they exist. But do they do me any good? If I'm
+storing repos, rather than metadata about repos, then do I really gain
+anything by reusing the schema? Plus some things seem a little weird,
+like the prevalence of ref/many attributes.
+
+The thing is, it's probably better to use them than not use them, even
+if I don't expect the data to be stored in the same database, if for
+no other reason than that someone smart thought about how to do it.
+*** Schema
+- From codeq
+  - :git/type [keyword] - Type enum for git objects - one
+    of :commit, :tree, :blob, :tag
+  - :git/sha [string] - A git sha, should be in repo
+  - :repo/commits [ref/many] - Assocate a repo with these git commits
+  - :repo/uri [string] - A git repo URI
+  - :commit/parents [ref/many] - Parents of a commit
+  - :commit/tree [ref] - Root node of a commit
+  - :commit/message [string] - A commit message
+  - :commit/author [ref] - Person who authored a commit
+  - :commit/authoredAt [inst] - Timestamp of authorship of commit
+  - :commit/committer [ref] - Person who committed a commit
+  - :commit/committedAt [inst] - Timestamp of a commit
+  - :tree/nodes [ref/many] - Nodes of a git tree
+  - :node/filename [ref] - filename of a tree node
+  - :node/paths [ref/many] - Paths of a tree node
+  - :node/object [ref] - Git object (tree/blob) in a tree node
+  - :git/prior [ref] - Node containing prior value of a git object
+  - :email/address [string] - An email address
+  - :file/name [string] - A filename
+
+- Others needed
+  - :ref/name [string] - name of a ref like HEAD or master
+  - :ref/repo [ref] - The repo this ref belongs to
+  - :git/commit [ref] - A commit
+  - :node/mode [???] - The mode bits for a node
+
+Is that enough? Let's think about a simple repo:
+
+#+begin_example
+[<repo1> :repo/uri "foo/bar"]
+[<HEAD1> :ref/repo <repo1>]
+[<HEAD1> :git/commit <commit1>]
+[<master1> :ref/repo <repo1>]
+[<commit1> :commit/tree <tree1>]
+[<commit1> :commit/message "Initial commit"]
+[...additional <commit1> datoms]
+[<commit2> :commit/parents <commit1>]
+[...additional <commit2> datoms]
+[<tree1> :tree/nodes #{<subtree1> <blob1> <blob2>}]
+[<subtree1> :tree/nodes #{<blob3>}]
+[<blob1> ???
+
+TODO: more
+#+end_example
+
+*** Operations Needed
+**** TODO hash-object
+- Take a file and get the corresponding SHA for it
 
 *** Trace of Git network protocol
 
