@@ -54,13 +54,12 @@
  ;; See also codeq:
  ;; https://github.com/Datomic/codeq/blob/master/src/datomic/codeq/core.clj
  :git
- [[{:db/id #db/id[:db.part/db]
-    :db/ident :git/type
-    :db/valueType :db.type/keyword
-    :db/cardinality :db.cardinality/one
-    :db/index true
-    :db/doc "Type enum for git objects - one of :commit, :tree, :blob, :tag"
-    :db.install/_attribute :db.part/db}
+ [[[:user/attr
+    :git/type
+    :keyword
+    {:db/index true}
+    "Type enum for git objects - one of :commit, :tree, :blob, :tag"
+    ] 
 
    {:db/id #db/id[:db.part/db]
     :db/ident :git/sha
