@@ -13,6 +13,9 @@
                  ;; [io.pedestal/pedestal.tomcat "0.2.2"]
 
                  [com.datomic/datomic-free "0.9.4360"]
+
+                 [org.eclipse.jgit/org.eclipse.jgit "3.2.0.201312181205-r"]
+                 [org.eclipse.jgit/org.eclipse.jgit.http.server "3.2.0.201312181205-r"]
                  ]
   :min-lein-version "2.0.0"
   :resource-paths ["config", "resources"]
