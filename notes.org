@@ -81,7 +81,6 @@ In a perfect world:
 - What do the extensions to Markdown offer?
 - Can the tool itself be integrated in an interesting way?
 
-
 ** TODO ERb
 *** Notes
 
@@ -111,6 +110,28 @@ In a perfect world:
 - A wiki engine written in Squeak. Might be the sort of self-modifying
   thingy that I have in mind.
 - Somehow related to Commanche.
+** TODO JGit
+Does JGit give us anything useful? For example, does it deal with CRLF
+issues, or with computing SHAs? It looks like ObjectDatabase *might*
+be flexible enough that we could actually implement it on top of
+Datomic.
+
+One thing I want to be sure we can do is to keep stuff like the
+committer separate. That is, I don't want to be forced down a road
+where I'd have to deal with commits as byte streams in the JGit
+libraries, and then have to tease them back apart so they could be
+stored in Datomic with the committer broken out separately.
+
+It looks like JGit has an implementation of a Git HTTP server that we
+might be able to use. I'm guessing that means we have to implement
+ObjectDatabase...
+
+GitServlet seems to be the key. It has a .setRepositoryResolver that
+takes a RepositoryResolver, which is presumably how we get from names
+to instances of Repostiory.
+
+
+
 * Random idea parking lot
 
 - Something akin to macro expansion - a data model for pages that has
