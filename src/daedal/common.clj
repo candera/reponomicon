@@ -3,7 +3,7 @@
   put things that don't have a better place."
   (:import [java.security MessageDigest]))
 
-(defn digest
+#_(defn digest
   "Returns a string that is an encoding of a cryptographic hash of
   `s`."
   [s]

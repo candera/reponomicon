@@ -4,6 +4,7 @@
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "1.5.1"]
+                 [org.clojure/tools.logging "0.2.6"]
                  [io.pedestal/pedestal.service "0.2.2"]
                  [io.pedestal/pedestal.service-tools "0.2.2"]
 
@@ -17,6 +18,7 @@
                  [org.eclipse.jgit/org.eclipse.jgit "3.2.0.201312181205-r"]
                  [org.eclipse.jgit/org.eclipse.jgit.http.server "3.2.0.201312181205-r"]
                  ]
+  :global-vars {*warn-on-reflection* true}
   :min-lein-version "2.0.0"
   :resource-paths ["config", "resources"]
   :aliases {"run-dev" ["trampoline" "run" "-m" "daedal.server/run-dev"]}
@@ -31,4 +33,8 @@
                             (clojure.stacktrace/print-stack-trace t)
                             (println)))
                   :welcome (println "Welcome to pedestal-service! Run (tools-help) to see a list of useful functions.")}
-  :main ^{:skip-aot true} daedal.server)
+  :main ^{:skip-aot true} daedal.server
+  :profiles
+  {:dev {:dependencies [[org.clojure/tools.namespace "0.2.4"]
+                        [org.clojure/tools.trace "0.7.6"]]
+         :source-paths ["dev"]}})

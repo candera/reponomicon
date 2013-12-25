@@ -1,7 +1,7 @@
 (ns daedal.datomic
   "Functions for working with Datomic."
   (:require [daedal.common :as com]
-            [datomic.api :as d :refer (q conn)]))
+            [datomic.api :as d :refer (q connect)]))
 
 (defn- schema-present?
   "Returns true if the schema identified by `id` has already been
@@ -35,7 +35,9 @@
   "Transacts `schema` through `conn`, but only if it hasn't already
   been transacted into the database."
   [conn schema]
-  (let [schemas-str (pr-str schema)
+  (throw (ex-info "Not implemented"
+                  {:reason :not-implemented}))
+  #_(let [schemas-str (pr-str schema)
         schema-id (str (com/digest schemas-str) schema-key)]
     (if (schema-present? (d/db conn) schema-id)
       (log/info "Schema"

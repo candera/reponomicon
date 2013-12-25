@@ -130,7 +130,88 @@ GitServlet seems to be the key. It has a .setRepositoryResolver that
 takes a RepositoryResolver, which is presumably how we get from names
 to instances of Repostiory.
 
+* Wiki ideas
 
+** Git is the information model
+
+If we adopt the git information model (trees of trees), then we can
+use git tooling to modify the data. But it does mean the database has
+to accommodate anything that someone might do locally. It doesn't have
+to be valid input to the wiki - i.e. there might be an error when
+someone tries to render it - but we have to at least agree to store it
+and try to render it.
+
+** The information is stored in a database
+
+Not only does this give us query, but it gives us a convenient way to
+use the git model while still being able to distribute access to it
+across multiple machines. Reading from files on disk is a pain from
+multiple machines, but reading from a database is easy. And Datomic
+will let us know when something has changed, which we can use to
+invalidate local caches.
+
+Note that we don't need to store *all* the information in the
+database. In particular, the byte streams that make up the content
+could live elsewhere. Because they're immutable, we only need to look
+at them long enough to record metadata about them. Then we can copy or
+move them somewhere like S3 for other nodes to retrieve (and cache) if
+they want to. We might even be able to use something like git
+alternates to offload object retrieval directly onto the git client
+tooling.
+
+** Pluggable format support
+
+There shouldn't be one format that the wiki requires, but rather an
+information and/or processing model that different grammars/languages
+can be parsed to.
+
+** Metadata
+
+Pages should be able to have metadata associated with them. Things
+like "category". Metadata should be extensible (namespaced). I sort of
+like the idea of having optional headers at the beginning of the file
+of the form =Name.space/Name: Value= (for a topic expressed in
+markup), where a blank line indicates termination of the metadata and
+the beginning of content.
+
+** Code and content are separate repositories
+
+If the underlying storage for the wiki is the git model, and the
+output of the wiki depends on both the code and the content in the
+wiki, then it might help to have the code and the content be in
+different repositories. That gives us a convenient way to track the
+validity of the output with just two numbers: the SHAs of the commits
+of the code used to generate the output was generated.
+
+It would be possible to have more fine-grained dependency tracking.
+For instance, to watch the execution of output generation to build a
+dependency graph. But that gets weird because we have to do things
+like figure out whether code was emitting links to all topics in a
+given category. Which we could invalidate by *adding* content, which
+wouldn't get picked up by a straight topic-level dependency graph.
+
+By moving to a single version number for the entire corpus (the git
+SHA of a tip ref), we have a number that encompasses the entirety of
+the inputs. I.e. if output is seen as a function taking the entire
+content and code bases and producing output, then if we have a number
+that only changes when the code and content change, then we can
+trivially cache.
+
+At some point I had it in my head what problem splitting the code from
+the content solves, but now I can't remember what it is. Especially
+given that if a topic contains script (or even if it doesn't), it can
+be considered code. So what's the difference?
+
+** Content is hierarchical and links can be relative
+
+There should be a way of organizing the content into groups, and
+linking between/within groups should have a "natural" syntax. For
+instance, something like =[ [ Foo ] ]= should link to a topic Foo in
+the same namespace as the source document, but we should also be able
+to do things like =[ [Foo/Bar] ]= and =[ [../Foo/Bar]]=.
+
+The real question here is whether there are other parts of the
+hierarchy. For instance, if I w
 
 * Random idea parking lot
 
@@ -259,6 +340,11 @@ it depends on the environment as well.
 
 ** Prototype 2 (gitomic)
 
+*** Tasks
+**** TODO Implement Repository over memory
+- Just use an atom hold a map
+- Point is to see what it looks like in the simplest form possible.
+- Might make sense to pseudocode first
 *** Description
 
 An implementation of one of the git protocols backed by Datomic.
