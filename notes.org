@@ -341,10 +341,15 @@ it depends on the environment as well.
 ** Prototype 2 (gitomic)
 
 *** Tasks
-**** TODO Implement Repository over memory
+**** INPROGRESS Implement Repository over memory
 - Just use an atom hold a map
 - Point is to see what it looks like in the simplest form possible.
-- Might make sense to pseudocode first
+
+**** INPROGRESS Expose it via a Servlet
+- Working on this now. But the current task is to refactor away from
+  Pedestal, since it's not adding anything given that I already have a
+  Servlet implementation from JGit.
+
 *** Description
 
 An implementation of one of the git protocols backed by Datomic.
