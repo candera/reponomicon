@@ -13,10 +13,19 @@
                  [io.pedestal/pedestal.jetty "0.2.2"]
                  ;; [io.pedestal/pedestal.tomcat "0.2.2"]
 
-                 [com.datomic/datomic-free "0.9.4360"]
+                 [com.datomic/datomic-free "0.9.4384"
+                  :exclusions [org.slf4j/slf4j-nop
+                               org.slf4j/slf4j-log4j12]]
+
+                 [ch.qos.logback/logback-classic "1.0.13"]
 
                  [org.eclipse.jgit/org.eclipse.jgit "3.2.0.201312181205-r"]
                  [org.eclipse.jgit/org.eclipse.jgit.http.server "3.2.0.201312181205-r"]
+
+                 ;; [org.slf4j/jcl-over-slf4j "1.7.2"]
+                 ;; [org.slf4j/slf4j-api "1.7.2"]
+                 ;; [org.slf4j/slf4j-log4j12 "1.6.4"]
+                 ;; [log4j/log4j "1.2.16"]
                  ]
   :global-vars {*warn-on-reflection* true}
   :min-lein-version "2.0.0"

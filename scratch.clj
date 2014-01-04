@@ -41,3 +41,14 @@
 (second mem-db)
 
 (def ins (.newObjectInserter repo))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(refresh)
+
+(def s (jetty-server))
+(def start-jetty (:start-fn s))
+(def stop-jetty (:stop-fn s))
+(start-jetty)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

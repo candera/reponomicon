@@ -170,7 +170,7 @@
 (defn mem-object-database
   [data]
   (proxy [ObjectDatabase] []
-    (close [] (not-implemented))
+    (close [])                          ; No-op
     (newInserter [] (mem-object-inserter data))
     (newReader [] (mem-object-reader data))))
 
@@ -211,7 +211,7 @@
 (defn mem-ref-database
   [db repo]
   (proxy [RefDatabase] []
-    (close [] (not-implemented))
+    (close [])                          ; No-op
     (create [] (not-implemented))
     (getAdditionalRefs [] (not-implemented))
     (getRef [name] (some-> db :refs (get name) mem-ref))
