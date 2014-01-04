@@ -8,9 +8,12 @@
             [clojure.tools.trace :refer (trace-ns)]
             [com.stuartsierra.component :as component]
             [daedal.git :refer :all]
-            [io.pedestal.service.http.jetty])
+            [daedal.system-instance :as system-instance])
   (:refer-clojure :exclude [methods])
   (:import [java.io ByteArrayInputStream]
+           [org.eclipse.jetty.server Server]
+           [org.eclipse.jetty.servlet ServletContextHandler ServletHolder]
+           [org.eclipse.jgit.http.server GitServlet]
            [org.eclipse.jgit.lib
             AbbreviatedObjectId
             AnyObjectId
@@ -28,6 +31,8 @@
             Repository
             RepositoryBuilder
             TreeFormatter]
+           [org.eclipse.jgit.transport.resolver RepositoryResolver UploadPackFactory]
+           [org.eclipse.jgit.transport UploadPack]))
 
 ;;; Development-time components
 
@@ -93,7 +98,7 @@
   [& {:keys [port]
       :or {port        9900}
       :as options}]
-  (let [jetty           (jetty-server app port)]
+  (let [jetty           (jetty-server port)]
     ;; TODO: If we start to have dependencies, make use of component/using
     (map->DevSystem {:jetty   jetty
                      :options options})))

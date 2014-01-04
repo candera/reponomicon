@@ -52,3 +52,37 @@
 (start-jetty)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(import '[org.eclipse.jetty.server Server]
+        '[org.eclipse.jetty.servlet ServletContextHandler ServletHolder]
+        '[org.eclipse.jgit.http.server GitServlet]
+        '[org.eclipse.jgit.transport.resolver RepositoryResolver UploadPackFactory]
+        '[org.eclipse.jgit.transport UploadPack])
+
+(defn js []
+  (let [server         (Server. 3003)
+        [repo db]      (mem-repo)
+        repo-resolver  (reify org.eclipse.jgit.transport.resolver.RepositoryResolver
+                         (open [this req name]
+                           (log/debug {:method :repository-resolver/open
+                                       :name name})
+                           repo))
+        upload-factory (proxy [org.eclipse.jgit.transport.resolver.UploadPackFactory] []
+                         (create [req repo]
+                           (log/debug {:method :upload-pack-factory/create
+                                       :request req
+                                       :repo repo})
+                           (UploadPack. repo)))
+        servlet        (doto (GitServlet.)
+                         (.setRepositoryResolver repo-resolver)
+                         (.setUploadPackFactory upload-factory))
+        context        (doto (ServletContextHandler.)
+                         (.setContextPath "/")
+                         (.addServlet (ServletHolder. servlet) "/*"))]
+    (.setHandler server context)
+    server))
+
+(def server (js))
+
+(.start server)
+(.stop server)
