@@ -20,7 +20,8 @@
             RefDatabase
             RefUpdate
             Repository
-            RepositoryBuilder]
+            RepositoryBuilder
+            StoredConfig]
            [org.eclipse.jgit.revwalk RevCommit]))
 
 
@@ -208,6 +209,20 @@
       ;;(not-implemented)
       )))
 
+(defn get-refs
+  [db repo ^String prefix]
+  (or (empty? prefix)
+      (.endsWith prefix "/")
+      (throw (ex-info "Invalid prefix: must be empty or end with slash"
+                      {:reason :invalid-prefix
+                       :prefix prefix})))
+  (->> db
+       :refs
+       (filter (fn [[^String n r]] (.startsWith n prefix)))
+       (map (fn [[n r]] [(subs n (.length prefix)) r]))
+       (into {})
+       ConcurrentHashMap.))
+
 (defn mem-ref-database
   [db repo]
   (proxy [RefDatabase] []
@@ -215,7 +230,7 @@
     (create [] (not-implemented))
     (getAdditionalRefs [] (not-implemented))
     (getRef [name] (some-> db :refs (get name) mem-ref))
-    (getRefs [prefix] (not-implemented))
+    (getRefs [prefix] (get-refs db repo prefix))
     (isNameConflicting [name]
       ;; TODO: This isn't right - we have to disallow
       ;; refs/heads/master/blah if refs/heads/master already exists,
@@ -232,14 +247,21 @@
   []
   (proxy [RepositoryBuilder] []))
 
+(defn mem-stored-config
+  []
+  (proxy [StoredConfig] []
+    (load [] (not-implemented))
+    (save [] (not-implemented))))
+
 (defn ^Repository mem-repo
   []
-  (let [db     {:refs    (ConcurrentHashMap.)
-                :objects (atom {})}
+  (let [db     {:refs    (ConcurrentHashMap.)  ; Maps ref name to ref object
+                :objects (atom {})
+                :config  (mem-stored-config)}
         obj-db (mem-object-database db)]
     [(proxy [Repository] [(mem-repo-builder)]
        (create [bare?] (not-implemented))
-       (getConfig [] (not-implemented))
+       (getConfig [] (:config db))
        (getObjectDatabase [] obj-db)
        (getRefDatabase [] (mem-ref-database db this))
        (getReflogReader [^String ref-name] (not-implemented))
