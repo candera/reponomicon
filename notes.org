@@ -346,9 +346,24 @@ it depends on the environment as well.
 - Point is to see what it looks like in the simplest form possible.
 
 **** INPROGRESS Expose it via a Servlet
-- Working on this now. But the current task is to refactor away from
-  Pedestal, since it's not adding anything given that I already have a
-  Servlet implementation from JGit.
+***** TODO Get a simple clone working
+Currently, clone "works" in the sense that it blows up because there's
+no HEAD ref. The next task is to populate the default database that
+comes up with a single commit and HEAD and master refs. Either that or
+get push working so we can populate that way
+
+***** TODO Enable push
+Push fails because http.receivepack is set to false by default (see
+[[http://www.parallelsymmetry.com/howto/git.jsp][this]]), which JGit is respecting by asking for authentication. So I can
+either figure out how to hook in to the authentication bits, or change
+the configuration to allow anonymous push.
+
+
+***** TODO Enable named repos
+
+Right now, requests for any URL result in retrieval of the singular
+repository. It would be straightforward to enable multiple repos, each
+under its own name.
 
 *** Description
 

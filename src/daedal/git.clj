@@ -251,7 +251,26 @@
   []
   (proxy [StoredConfig] []
     (load [] (not-implemented))
-    (save [] (not-implemented))))
+    (save [] (not-implemented))
+    ;; TODO: Automate this wrapping - this is sort of tedious.
+    (getBoolean
+      ([section name default-value]
+         (let [result (proxy-super getBoolean section name default-value)]
+           (log/debug "StoredConfig.getBoolean"
+                      :section section
+                      :name name
+                      :default-value default-value
+                      :result result)
+           result))
+      ([section subsection name default-value]
+         (let [result (proxy-super getBoolean section subsection name default-value)]
+           (log/debug "StoredConfig.getBoolean"
+                      :section section
+                      :subsection subsection
+                      :name name
+                      :default-value default-value
+                      :result result)
+           result)))))
 
 (defn ^Repository mem-repo
   []
