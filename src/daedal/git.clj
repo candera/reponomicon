@@ -22,7 +22,9 @@
             Repository
             RepositoryBuilder
             StoredConfig]
-           [org.eclipse.jgit.revwalk RevCommit]))
+           [org.eclipse.jgit.revwalk RevCommit]
+           [org.eclipse.jgit.transport
+            PackParser]))
 
 
 (defn not-implemented
@@ -123,8 +125,44 @@
                 :info      (parse-info type bits)}))
     id))
 
+(defn mem-pack-parser
+  [db object-database in]
+  (let [state (atom {})
+        crc (java.util.zip.CRC32.)]
+    (proxy [PackParser] [object-database in]
+      (onAppendBase [type-code data info]
+        (not-implemented))
+      (onBeginOfsDelta [delta-stream-position base-stream-position inflated-size]
+        (not-implemented))
+      (onBeginRefDelta [delta-stream-position base-id inflated-size]
+        (not-implemented))
+      (onBeginWholeObject [stream-position type inflated-size]
+        (.reset crc))
+      (onEndThinPack []
+        (not-implemented))
+      (onEndWholeObject [info]
+        (not-implemented))
+      (onInflatedObjectData [obj type-code data]
+        (not-implemented))
+      (onObjectData [src raw pos len]
+        (.update crc raw pos len))
+      (onObjectHeader [src raw pos len]
+        (.update crc raw pos len))
+      (onPackFooter [hash]
+        (not-implemented))
+      (onPackHeader [obj-cnt]
+        (swap! state assoc :object-count obj-cnt))
+      (onStoreStream [raw pos len]
+        (not-implemented))
+      (readDatabase [dst pos cnt]
+        (not-implemented))
+      (seekDatabase [obj info]
+        ;; Note that there are two two-arity overloads of this method.
+        ;; Need to resolve by type in the body.
+        (not-implemented)))))
+
 (defn mem-object-inserter
-  [db]
+  [object-database storage]
   (proxy [ObjectInserter] []
     (flush []
       ;; TODO: We could have some sort of pending/active split in the
@@ -138,42 +176,51 @@
       ;; method, which it then calls with the incorrect number of
       ;; arguments. So far this is the only way around this I've
       ;; found: to implement and explitly forward the call.
-      ([type ^bytes data] (mem-insert-obj this db type data))
-      ([type len in] (mem-insert-obj this db type in))
-      ([type data off len] (mem-insert-obj this db type data off len)))
-    (newPackParser [^InputStream in] (not-implemented))
-    (release [] (not-implemented))))
+      ([type ^bytes data] (mem-insert-obj this storage type data))
+      ([type len in] (mem-insert-obj this storage type in))
+      ([type data off len] (mem-insert-obj this storage type data off len)))
+    (newPackParser [^InputStream in] (mem-pack-parser storage object-database in))
+    (release [] ; no-op
+      )))
 
 (defn mem-object-loader
-  [obj]
-  (proxy [ObjectLoader] []
-    (getType [] (-> obj :type reverse-type-map))
-    (getCachedBytes
-      ([] (:data obj))
-      ([size-limit] (:data obj)))
-    (openStream [] (-> obj :data ByteArrayInputStream.))))
+  [storage ^AnyObjectId object-id]
+  (let [obj (-> @storage :objects (get (.name object-id)))]
+    (proxy [ObjectLoader] []
+      (getType [] (-> obj :type reverse-type-map))
+      (getCachedBytes
+        ([] (:data obj))
+        ([size-limit] (if obj
+                        (:data obj)
+                        (do
+                          (log/warn "Couldn't find object"
+                                    :object-id object-id)
+                          (throw (org.eclipse.jgit.errors.MissingObjectException.
+                                  (.copy object-id)
+                                  "unknown"))))))
+      (openStream [] (-> obj :data ByteArrayInputStream.)))))
 
 (defn mem-object-reader
-  [data]
+  [storage]
   (proxy [ObjectReader] []
     (getShallowCommits []
       ;; I'm not sure what shallow commits are, but it looks like they
       ;; can be turned off.
       #{})
-    (newReader [] (mem-object-reader data))
+    (newReader [] (mem-object-reader storage))
     (open
       ([^AnyObjectId object-id]
-         (-> data :objects deref (get (.name object-id)) mem-object-loader))
+         (mem-object-loader storage object-id))
       ([^AnyObjectId object-id type-int]
          (.open ^ObjectReader this object-id)))
     (resolve [^AbbreviatedObjectId id] (not-implemented))))
 
 (defn mem-object-database
-  [data]
+  [storage]
   (proxy [ObjectDatabase] []
     (close [])                          ; No-op
-    (newInserter [] (mem-object-inserter data))
-    (newReader [] (mem-object-reader data))))
+    (newInserter [] (mem-object-inserter this storage))
+    (newReader [] (mem-object-reader storage))))
 
 (defn mem-ref
   [r]
@@ -210,7 +257,7 @@
       )))
 
 (defn get-refs
-  [db repo ^String prefix]
+  [storage db repo ^String prefix]
   (or (empty? prefix)
       (.endsWith prefix "/")
       (throw (ex-info "Invalid prefix: must be empty or end with slash"
@@ -224,18 +271,18 @@
        ConcurrentHashMap.))
 
 (defn mem-ref-database
-  [db repo]
+  [storage db repo]
   (proxy [RefDatabase] []
     (close [])                          ; No-op
     (create [] (not-implemented))
     (getAdditionalRefs [] (not-implemented))
-    (getRef [name] (some-> db :refs (get name) mem-ref))
-    (getRefs [prefix] (get-refs db repo prefix))
+    (getRef [name] (some-> @storage :refs (get name) mem-ref))
+    (getRefs [prefix] (get-refs storage db repo prefix))
     (isNameConflicting [name]
       ;; TODO: This isn't right - we have to disallow
       ;; refs/heads/master/blah if refs/heads/master already exists,
       ;; and vice-versa.
-      (let [refs ^ConcurrentHashMap (:refs db)]
+      (let [refs ^ConcurrentHashMap (:refs @storage)]
         (.containsKey refs name)))
     (newRename [from-name to-name] (not-implemented))
     (newUpdate [name detach?]
@@ -261,7 +308,11 @@
                       :name name
                       :default-value default-value
                       :result result)
-           result))
+           (if (= ["http" "receivepack"] [section name])
+             (do
+               (log/warn "Returning hardcoded true for http.receivepack")
+               true)
+             result)))
       ([section subsection name default-value]
          (let [result (proxy-super getBoolean section subsection name default-value)]
            (log/debug "StoredConfig.getBoolean"
@@ -274,16 +325,16 @@
 
 (defn ^Repository mem-repo
   []
-  (let [db     {:refs    (ConcurrentHashMap.)  ; Maps ref name to ref object
-                :objects (atom {})
-                :config  (mem-stored-config)}
-        obj-db (mem-object-database db)]
-    [(proxy [Repository] [(mem-repo-builder)]
-       (create [bare?] (not-implemented))
-       (getConfig [] (:config db))
-       (getObjectDatabase [] obj-db)
-       (getRefDatabase [] (mem-ref-database db this))
-       (getReflogReader [^String ref-name] (not-implemented))
-       (notifyIndexChanged [] (not-implemented))
-       (scanForRepoChanges [] (not-implemented)))
-     db]))
+  (let [storage (atom {:refs    (ConcurrentHashMap.) ; Maps ref name to ref object
+                       :objects {}
+                       :config  (mem-stored-config)})
+        db      (mem-object-database storage)]
+    {:repo    (proxy [Repository] [(mem-repo-builder)]
+                (create [bare?] (not-implemented))
+                (getConfig [] (:config @storage))
+                (getObjectDatabase [] db)
+                (getRefDatabase [] (mem-ref-database storage db this))
+                (getReflogReader [^String ref-name] (not-implemented))
+                (notifyIndexChanged [] (not-implemented))
+                (scanForRepoChanges [] (not-implemented)))
+     :storage storage}))

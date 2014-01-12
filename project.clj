@@ -33,4 +33,6 @@
   :profiles
   {:dev {:dependencies [[org.clojure/tools.namespace "0.2.4"]
                         [org.clojure/tools.trace "0.7.6"]]
+         :jvm-opts     ["-Xdebug"
+                        "-Xrunjdwp:transport=dt_socket,server=y,suspend=n,address=9901"]
          :source-paths ["dev"]}})

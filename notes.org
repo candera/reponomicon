@@ -350,7 +350,9 @@ it depends on the environment as well.
 Currently, clone "works" in the sense that it blows up because there's
 no HEAD ref. The next task is to populate the default database that
 comes up with a single commit and HEAD and master refs. Either that or
-get push working so we can populate that way
+get push working so we can populate that way. Probably it makes more
+sense to enable push, since that's going to ensure that we get
+populated with correct data.
 
 ***** TODO Enable push
 Push fails because http.receivepack is set to false by default (see
@@ -358,6 +360,8 @@ Push fails because http.receivepack is set to false by default (see
 either figure out how to hook in to the authentication bits, or change
 the configuration to allow anonymous push.
 
+Much as I would like to figure out authentication, I'm going to go
+with just disabling it for now.
 
 ***** TODO Enable named repos
 

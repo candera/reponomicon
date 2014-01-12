@@ -32,31 +32,44 @@
             RepositoryBuilder
             TreeFormatter]
            [org.eclipse.jgit.transport.resolver RepositoryResolver UploadPackFactory]
-           [org.eclipse.jgit.transport UploadPack]))
+           [org.eclipse.jgit.transport ReceivePack UploadPack]))
 
 ;;; Development-time components
 
+;; TODO: Maybe make this a component of its own
+(def repos (atom {}))
+
 (defn create-jetty-server
   [port]
-  (let [server         (Server. port)
-        [repo db]      (mem-repo)
-        repo-resolver  (reify org.eclipse.jgit.transport.resolver.RepositoryResolver
-                         (open [this req name]
-                           (log/debug {:method :repository-resolver/open
-                                       :name name})
-                           repo))
-        upload-factory (proxy [org.eclipse.jgit.transport.resolver.UploadPackFactory] []
-                         (create [req repo]
-                           (log/debug {:method :upload-pack-factory/create
-                                       :request req
-                                       :repo repo})
-                           (UploadPack. repo)))
-        servlet        (doto (GitServlet.)
-                         (.setRepositoryResolver repo-resolver)
-                         (.setUploadPackFactory upload-factory))
-        context        (doto (ServletContextHandler.)
-                         (.setContextPath "/")
-                         (.addServlet (ServletHolder. servlet) "/*"))]
+  (let [server        (Server. port)
+        repo-resolver (reify org.eclipse.jgit.transport.resolver.RepositoryResolver
+                        (open [this req name]
+                          (log/debug {:method :repository-resolver/open
+                                      :name name})
+                          (if-let [{:keys [repo]} (get name @repos)]
+                            repo
+                            (let [r (mem-repo)]
+                              (swap! repos assoc name r)
+                              (:repo r)))))
+        upack-factory (proxy [org.eclipse.jgit.transport.resolver.UploadPackFactory] []
+                        (create [req repo]
+                          (log/debug {:method :upload-pack-factory/create
+                                      :request req
+                                      :repo repo})
+                          (UploadPack. repo)))
+        rpack-factory (proxy [org.eclipse.jgit.transport.resolver.ReceivePackFactory] []
+                        (create [req repo]
+                          (log/debug {:method :receive-pack-factory/create
+                                      :request req
+                                      :repo repo})
+                          (ReceivePack. repo)))
+        servlet       (doto (GitServlet.)
+                        (.setRepositoryResolver repo-resolver)
+                        (.setUploadPackFactory upack-factory)
+                        (.setReceivePackFactory rpack-factory))
+        context       (doto (ServletContextHandler.)
+                        (.setContextPath "/")
+                        (.addServlet (ServletHolder. servlet) "/*"))]
     (.setHandler server context)
     server))
 

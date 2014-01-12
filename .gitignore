@@ -4,3 +4,5 @@ logs/
 *~
 /.lein-repl-history
 /.nrepl-port
+/.DS_Store
+/.metadata/
