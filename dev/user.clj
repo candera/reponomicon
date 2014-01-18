@@ -40,7 +40,7 @@
 (def repos (atom {}))
 
 (defn create-jetty-server
-  [port]
+  [^long port]
   (let [server        (Server. port)
         repo-resolver (reify org.eclipse.jgit.transport.resolver.RepositoryResolver
                         (open [this req name]
@@ -83,12 +83,12 @@
           (log/info :STARTING "jetty" :port port)
           (reset! server
                   (create-jetty-server port))
-          (.start @server)
+          (.start ^Server @server)
           (log/info :STARTED "jetty" :port port)))
       (stop [_]
         (when @server
           (log/info :STOPPING "jetty" :port port)
-          (.stop @server)
+          (.stop ^Server @server)
           (reset! server nil)
           (log/info :STOPPED "jetty" :port port))))))
 

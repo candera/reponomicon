@@ -6,6 +6,8 @@
             InputStream]
            [java.util Arrays]
            [java.util.concurrent ConcurrentHashMap]
+           [org.eclipse.jgit.internal.storage.dfs
+            DfsRepository]
            [org.eclipse.jgit.lib
             AbbreviatedObjectId
             AnyObjectId
@@ -24,6 +26,7 @@
             StoredConfig]
            [org.eclipse.jgit.revwalk RevCommit]
            [org.eclipse.jgit.transport
+            PackedObjectInfo
             PackParser]))
 
 
@@ -112,6 +115,7 @@
 (defn mem-insert-obj
   "Inserts an object into the database `db`, returning its new ID."
   [^ObjectInserter inserter db type data & [off len]]
+  (log/trace "Inserting" :type type)
   (let [bits (get-bytes data off len)
         id (.idFor inserter type bits)]
     (-> db
@@ -140,26 +144,35 @@
         (.reset crc))
       (onEndThinPack []
         (not-implemented))
-      (onEndWholeObject [info]
-        (not-implemented))
+      (onEndWholeObject [^PackedObjectInfo info]
+        ;; Yes, really: JGit uses an int, but CRC32 uses a long
+        (.setCRC info (unchecked-int (.getValue crc))))
       (onInflatedObjectData [obj type-code data]
-        (not-implemented))
+        ;; no-op? ObjectDirectoryPackParser ignores it, so we do, too.
+        ;; TODO: Is that correct?
+        )
       (onObjectData [src raw pos len]
         (.update crc raw pos len))
       (onObjectHeader [src raw pos len]
         (.update crc raw pos len))
       (onPackFooter [hash]
-        (not-implemented))
+        ;; The DFS implementation just stores the hash. Not sure we
+        ;; need to. Do nothing for now
+        )
       (onPackHeader [obj-cnt]
         (swap! state assoc :object-count obj-cnt))
       (onStoreStream [raw pos len]
-        (not-implemented))
+        ;; TODO: Do I actually need to do anything here, or is a no-op
+        ;; okay, because the ObjectInserter is going to actually store
+        ;; the stream?
+        )
       (readDatabase [dst pos cnt]
         (not-implemented))
-      (seekDatabase [obj info]
+      (seekDatabase [obj-or-delta info]
         ;; Note that there are two two-arity overloads of this method.
         ;; Need to resolve by type in the body.
-        (not-implemented)))))
+        (.reset crc)
+        (proxy-super readObjectHeader info)))))
 
 (defn mem-object-inserter
   [object-database storage]
@@ -216,8 +229,19 @@
     (resolve [^AbbreviatedObjectId id] (not-implemented))))
 
 (defn mem-object-database
-  [storage]
-  (proxy [ObjectDatabase] []
+  [storage repo]
+  (proxy [DfsObjectDatabase] [repo (DfsReaderOptions.)]
+    (listPacks [] (:packs @storage))
+    (newPack [^PackSource source]
+      (let [pack-name (format "pack-%05d-%s"
+                              (swap! (:pack-counter storage) inc)
+                              (.name source))
+            desc      (DfsPackDescription. (.getDescription this)
+                                           pack-name)]
+        (.setPackSource source)))
+    (commitPackImpl [desc replace]
+      ;; TODO: Was here
+      )
     (close [])                          ; No-op
     (newInserter [] (mem-object-inserter this storage))
     (newReader [] (mem-object-reader storage))))
@@ -263,12 +287,12 @@
       (throw (ex-info "Invalid prefix: must be empty or end with slash"
                       {:reason :invalid-prefix
                        :prefix prefix})))
-  (->> db
-       :refs
-       (filter (fn [[^String n r]] (.startsWith n prefix)))
-       (map (fn [[n r]] [(subs n (.length prefix)) r]))
-       (into {})
-       ConcurrentHashMap.))
+  (let [m (->> db
+               :refs
+               (filter (fn [[^String n r]] (.startsWith n prefix)))
+               (map (fn [[n r]] [(subs n (.length prefix)) r]))
+               (into {}))]
+    (ConcurrentHashMap. ^java.util.Map m)))
 
 (defn mem-ref-database
   [storage db repo]
@@ -276,13 +300,13 @@
     (close [])                          ; No-op
     (create [] (not-implemented))
     (getAdditionalRefs [] (not-implemented))
-    (getRef [name] (some-> @storage :refs (get name) mem-ref))
+    (getRef [name] (some-> storage :refs (get name) mem-ref))
     (getRefs [prefix] (get-refs storage db repo prefix))
     (isNameConflicting [name]
       ;; TODO: This isn't right - we have to disallow
       ;; refs/heads/master/blah if refs/heads/master already exists,
       ;; and vice-versa.
-      (let [refs ^ConcurrentHashMap (:refs @storage)]
+      (let [refs ^ConcurrentHashMap (:refs storage)]
         (.containsKey refs name)))
     (newRename [from-name to-name] (not-implemented))
     (newUpdate [name detach?]
@@ -292,7 +316,8 @@
 
 (defn mem-repo-builder
   []
-  (proxy [RepositoryBuilder] []))
+  (proxy [RepositoryBuilder] []
+    (build [] (throw (UnsupportedOperationException.)))))
 
 (defn mem-stored-config
   []
@@ -323,17 +348,25 @@
                       :result result)
            result)))))
 
+(defn db
+  [storage repo]
+  ;; TODO: Get rid of the race condition here
+  (or (-> storage :db deref)
+      (reset! (:db storage)
+              (mem-object-database storage repo))))
+
 (defn ^Repository mem-repo
   []
-  (let [storage (atom {:refs    (ConcurrentHashMap.) ; Maps ref name to ref object
-                       :objects {}
-                       :config  (mem-stored-config)})
-        db      (mem-object-database storage)]
-    {:repo    (proxy [Repository] [(mem-repo-builder)]
+  (let [storage {:refs    (ConcurrentHashMap.) ; Maps ref name to ref object
+                 :objects (atom {})
+                 :packs   (atom [])
+                 :config  (mem-stored-config)
+                 :db      (atom nil)}]
+    {:repo    (proxy [DfsRepository] [(mem-repo-builder)]
                 (create [bare?] (not-implemented))
-                (getConfig [] (:config @storage))
-                (getObjectDatabase [] db)
-                (getRefDatabase [] (mem-ref-database storage db this))
+                (getConfig [] (:config storage))
+                (getObjectDatabase [] (db storage this))
+                (getRefDatabase [] (mem-ref-database storage (db storage this) this))
                 (getReflogReader [^String ref-name] (not-implemented))
                 (notifyIndexChanged [] (not-implemented))
                 (scanForRepoChanges [] (not-implemented)))
