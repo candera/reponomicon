@@ -1,0 +1,124 @@
+;; Schemas. Will be reasserted if anything changes.
+[
+;;; General helper functions
+ [{:db/ident :user/attr
+   :db/doc "Helper fn for creating attributes. type is a bare keyword like :ref,
+            :instant, or :string. options is a map of standard Datomic schema
+            attributes to be merged in with defaults (cardinality one, indexed
+            false)."
+   :db/id #db/id[:db.part/db]
+   :db/fn #db/fn{:lang :clojure
+                 :params [db ident type options docstring]
+                 :code
+                 [(merge
+                   {:db/id (datomic.api/tempid :db.part/db)
+                    :db/doc docstring
+                    :db/ident ident
+                    :db/valueType (keyword "db.type" (name type))
+                    :db/cardinality :db.cardinality/one
+                    :db.install/_attribute :db.part/db}
+                   options)]}}
+
+  {:db/ident :user/part
+   :db/doc "Helper fn for creating partitions."
+   :db/id #db/id[:db.part/db]
+   :db/fn #db/fn{:lang :clojure
+                 :params [db ident docstring]
+                 :code
+                 [{:db/ident ident
+                   :db/doc docstring
+                   :db/id (datomic.api/tempid :db.part/db)
+                   :db.install/_partition :db.part/db}]}}
+
+  {:db/ident :user/ident
+   :db/doc "Helper fn for creating generic entities with keyword identities."
+   :db/id #db/id[:db.part/db]
+   :db/fn #db/fn{:lang :clojure
+                 :params [db ident docstring]
+                 :code
+                 [{:db/ident ident
+                   :db/doc docstring
+                   :db/id (datomic.api/tempid :db.part/db)}]}}]
+
+ ;; Transacted schema tracking
+ [[:user/part :part/schemas
+   "Partition for assertions about which schemas are present."]
+
+  [:user/attr :schema/transacted-schema-id :string
+   {:db/unique :db.unique/identity}
+   "A unique identifier for a particular version of a particular
+  schema. Presence of this datom indicates that the corresponding
+  schema is present in the database and need not be reasserted."]]
+
+ ;; See also codeq:
+ ;; https://github.com/Datomic/codeq/blob/master/src/datomic/codeq/core.clj
+
+ ;; codeq-compatible attributes
+ [[:user/attr :git/type :keyword
+   {:db/index true}
+   "Type enum for git objects - one of :commit, :tree, :blob, :tag"]
+
+  [:user/attr :git/sha :string
+   {:db/unique :db.unique/identity}
+   "A git sha, should be in repo"]
+
+  [:user/attr :repo/commits :ref
+   {:db/cardinality :db.cardinality/many}
+   "Associate repo with these git commits"]
+
+  [:user/attr :repo/uri :string
+   {:db/unique :db.unique/identity}
+   "A git repo uri"]
+
+  [:user/attr :commit/parents :ref
+   {:db/cardinality :db.cardinality/many}
+   "Parents of a commit"]
+
+  [:user/attr :commit/tree :ref
+   {}
+   "Root node of a commit"]
+
+  [:user/attr :commit/message :string
+   {:db/fulltext true}
+   "A commit message"]
+
+  [:user/attr :commit/author :string
+   {}
+   "Person who authored a commit"]
+
+  [:user/attr :cimmit/authoredAt :instant
+   {:db/index true}
+   "Timestamp of authorship of commit"]
+
+  [:user/attr :commit/committer :ref
+   {}
+   "Person who committed a commit"]
+
+  [:user/attr :commit/committedAt :instant
+   {:db/index true}
+   "Timestamp of commit"]
+
+  ;; daedal-specific attributes
+  [:user/attr :node/filename :ref
+   {}
+   "filename of a tree node"]
+
+  [:user/attr :node/paths :ref
+   {:db/cardinality :db.cardinality/many}
+   "Paths of a tree node"]
+
+  [:user/attr :node/object :ref
+   {}
+   "Git object (tree/blob) in a tree node"]
+
+  [:user/attr :git/prior :ref
+   {}
+   "Node containing prior value of a git object"]
+
+  [:user/attr :email/address :string
+   {:db/unique :db.unique/identity}
+   "An email address"]
+
+  [:user/attr :file/name :string
+   {:db/fulltext true}
+   "A filename"]]]

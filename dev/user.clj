@@ -1,5 +1,6 @@
 (ns user
-  (:require [clojure.java.io :as io]
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.java.javadoc :refer (javadoc)]
             [clojure.pprint :as pprint :refer (pprint)]
             [clojure.repl :refer :all]
@@ -7,6 +8,9 @@
             [clojure.tools.namespace.repl :refer (refresh refresh-all)]
             [clojure.tools.trace :refer (trace-ns)]
             [com.stuartsierra.component :as component]
+            [datomic.api :as d]
+            [daedal.common :as com]
+            [daedal.datomic :as datomic]
             [daedal.git :refer :all]
             [daedal.system-instance :as system-instance])
   (:refer-clojure :exclude [methods])
@@ -92,11 +96,11 @@
           (reset! server nil)
           (log/info :STOPPED "jetty" :port port))))))
 
-(def dev-system-components [:jetty])
+(def dev-system-components [:jetty :datomic])
 
 ;; Do not create directly; use dev-system function
 ;; options is only here so we can look at it later if we want to.
-(defrecord DevSystem [jetty options]
+(defrecord DevSystem [jetty options datomic]
   component/Lifecycle
   (start [this]
     (component/start-system this dev-system-components))
@@ -109,11 +113,18 @@
 
       :port        Web server port, default is 9900"
   [& {:keys [port]
-      :or {port        9900}
+      :or {port 9900}
       :as options}]
-  (let [jetty           (jetty-server port)]
+  (let [jetty      (jetty-server port)
+        schema-str (-> "daedal/schema.edn"
+                       io/resource
+                       slurp)
+        schema     (read-string schema-str)
+        schema-id  (com/digest schema-str)
+        datomic    (datomic/temp-peer schema schema-id)]
     ;; TODO: If we start to have dependencies, make use of component/using
     (map->DevSystem {:jetty   jetty
+                     :datomic datomic
                      :options options})))
 
 ;;; Development system lifecycle
@@ -150,6 +161,18 @@
   []
   (stop)
   (refresh :after 'user/go))
+
+;;; Datomic helpers
+
+(defn conn
+  "Returns a connection to the dev database"
+  []
+  (-> system-instance/system :datomic :uri d/connect))
+
+(defn db
+  "Returns the current value of the dev database"
+  []
+  (d/db (conn)))
 
 ;;; Utility methods
 
