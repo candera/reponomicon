@@ -7,7 +7,7 @@
 (defn digest
   "Returns a string that is an encoding of a cryptographic hash of
   `s`."
-  [s]
+  [^String s]
   (let [hash (MessageDigest/getInstance "SHA-256")]
     (.update hash (.getBytes s))
     (let [digest (.digest hash)]

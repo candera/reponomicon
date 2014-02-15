@@ -53,22 +53,62 @@
  ;; See also codeq:
  ;; https://github.com/Datomic/codeq/blob/master/src/datomic/codeq/core.clj
 
- ;; codeq-compatible attributes
- [[:user/attr :git/type :keyword
-   {:db/index true}
+ [
+  ;; Object partitions
+  [:user/part :part/commits
+   "Partition for commit entities"]
+
+  [:user/part :part/blobs
+   "Partition for blob entities"]
+
+  [:user/part :part/tags
+   "Partition for tag entites"]
+
+  [:user/part :part/trees
+   "Partition for tree entities"]
+
+  [:user/part :part/refs
+   "Partition for ref entities"]
+
+  [:user/part :part/repos
+   "Partition for repo entities"]
+
+  ;; Repository entities
+
+  [:user/attr :repo/name :string
+   {:db/unique :db.unique/identity}
+   "A git repo uri/name. Something like 'candera/gitomic'."]
+
+  [:user/attr :repo/description :string
+   {}
+   "A human-readable description of the repository"]
+
+  ;; Ref entities
+  [:user/attr :ref/name :string
+   {}
+   "The name of this reference. E.g. 'refs/heads/master'."]
+
+  [:user/attr :ref/repo :ref
+   {}
+   "The repository entity to which this ref is scoped."]
+
+  [:user/attr :ref/target :ref
+   {}
+   "The git object to which this ref refers."]
+
+  ;; Object entities
+
+  [:user/attr :object/type :keyword
+   {}
    "Type enum for git objects - one of :commit, :tree, :blob, :tag"]
 
-  [:user/attr :git/sha :string
+  [:user/attr :object/sha :string
    {:db/unique :db.unique/identity}
-   "A git sha, should be in repo"]
+   "String form of the git sha, in lower-case hexidecimal."]
 
-  [:user/attr :repo/commits :ref
-   {:db/cardinality :db.cardinality/many}
-   "Associate repo with these git commits"]
-
-  [:user/attr :repo/uri :string
-   {:db/unique :db.unique/identity}
-   "A git repo uri"]
+  [:user/attr :object/len :long
+   {}
+   "Length of the object in bytes."]
 
   [:user/attr :commit/parents :ref
    {:db/cardinality :db.cardinality/many}
@@ -86,39 +126,27 @@
    {}
    "Person who authored a commit"]
 
-  [:user/attr :cimmit/authoredAt :instant
+  [:user/attr :commit/authoredAt :instant
    {:db/index true}
    "Timestamp of authorship of commit"]
 
-  [:user/attr :commit/committer :ref
-   {}
+  [:user/attr :commit/committer :string
+   {:db/index true}
    "Person who committed a commit"]
 
   [:user/attr :commit/committedAt :instant
    {:db/index true}
    "Timestamp of commit"]
 
-  ;; daedal-specific attributes
-  [:user/attr :node/filename :ref
-   {}
+  [:user/attr :node/filename :string
+   {:db/index true}
    "filename of a tree node"]
 
-  [:user/attr :node/paths :ref
-   {:db/cardinality :db.cardinality/many}
-   "Paths of a tree node"]
+  [:user/attr :node/parent :ref
+   {}
+   "Parent of a tree node"]
 
+  ;; I'm not sure we need this one.
   [:user/attr :node/object :ref
    {}
-   "Git object (tree/blob) in a tree node"]
-
-  [:user/attr :git/prior :ref
-   {}
-   "Node containing prior value of a git object"]
-
-  [:user/attr :email/address :string
-   {:db/unique :db.unique/identity}
-   "An email address"]
-
-  [:user/attr :file/name :string
-   {:db/fulltext true}
-   "A filename"]]]
+   "Git object (tree/blob) in a tree node"]]]

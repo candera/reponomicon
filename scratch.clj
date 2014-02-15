@@ -1,4 +1,4 @@
-(require '[clojure.test :refer (is)])
+() (require '[clojure.test :refer (is)])
 
 (let [repo (mem-repo)
       _ (is (nil? (.resolve repo "HEAD")))
@@ -86,3 +86,46 @@
 
 (.start server)
 (.stop server)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Find all refs
+
+(->> (db)
+     (d/q '[:find ?ref
+            :where
+            [?ref :ref/name]])
+     (map first)
+     (map #(d/entity (db) %))
+     (map d/touch))
+
+;; Find all repos
+(->> (db)
+     (d/q '[:find ?repo
+            :where
+            [?repo :repo/name]])
+     (map first)
+     (map #(d/entity (db) %))
+     (map d/touch))
+
+;; Find all objects
+
+(->> (db)
+     (d/q '[:find ?obj
+            :where
+            [?obj :object/sha]])
+     (map first)
+     (map #(d/entity (db) %))
+     (map d/touch))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Working with JGit's stupid packfile API
+
+(let [path "/var/folders/g4/cjxsxcpd4n511t1h5m78m29m0000gn/T/incoming-8633512489875740872.pack"]
+  (-> path
+      io/file
+      (org.eclipse.jgit.internal.storage.file.PackFile. 0)
+      .iterator
+      (into [])
+      (pprint)))

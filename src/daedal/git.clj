@@ -1,11 +1,21 @@
 (ns daedal.git
   "Implementation of git repo"
-  (:require [clojure.tools.logging :as log])
-  (:import [java.io
+  (:require [clojure.java.io :as io]
+            [clojure.tools.logging :as log]
+            [datomic.api :as d])
+  (:import [com.google.common.io
+            Files]
+           [java.io
             ByteArrayInputStream
+            File
             InputStream]
+           [java.nio ByteBuffer]
            [java.util Arrays]
            [java.util.concurrent ConcurrentHashMap]
+           [org.eclipse.jgit.errors MissingObjectException]
+           [org.eclipse.jgit.internal.storage.file
+            PackIndexWriter
+            PackFile]
            [org.eclipse.jgit.lib
             AbbreviatedObjectId
             AnyObjectId
@@ -15,22 +25,71 @@
             ObjectInserter
             ObjectLoader
             ObjectReader
+            ObjectStream
             PersonIdent
+            ProgressMonitor
             Ref
             RefDatabase
             RefUpdate
+            RefUpdate$Result
             Repository
             RepositoryBuilder
             StoredConfig]
            [org.eclipse.jgit.revwalk RevCommit]
            [org.eclipse.jgit.transport
-            PackParser]))
+            PackedObjectInfo
+            PackParser
+            PackParser$ObjectTypeAndSize]))
 
 
 (defn not-implemented
   []
   (throw (ex-info "Not yet implemeted"
                   {:reason :not-implemented})))
+
+;;; Object storage
+
+;; These next few methods can become the basis for a protocol that can
+;; be extracted once there's more than one place to store objects.
+
+;; TODO: Consider making the interface asynchronous
+
+(defn- ^File obj-file
+  "Returns a java.io.File pointing to `obj-name` within file store `store`."
+  [file-store obj-name]
+  (-> file-store :obj-dir (io/file obj-name)))
+
+(defn cached-obj-bytes
+  "Returns the (potentially cached) bytes of object named `obj-name`
+  from `store`."
+  [store obj-name]
+  ;; TODO: Maybe cache
+  (Files/toByteArray (obj-file store obj-name)))
+
+(defn ^InputStream obj-stream
+  "Returns an InputStream over the object named `obj-name`"
+  [store obj-name]
+  (java.io.FileInputStream. (obj-file store obj-name)))
+
+(defn write-obj
+  "Writes an object into the store under the name `obj-name`."
+  [store obj-name ^InputStream data]
+  (let [buf-size 10000
+        buf      (byte-array buf-size)]
+    (with-open [out (java.io.FileOutputStream. (obj-file store obj-name))]
+      (loop [bytes-read (.read data buf 0 buf-size)]
+        (when (pos? bytes-read)
+          (.write out buf 0 bytes-read)
+          (recur (.read data buf 0 buf-size)))))))
+
+;; File-based object storage
+
+(defn file-obj-store
+  [repo-name]
+  ;; TODO: Sanitize repo-name
+  (let [obj-dir (io/file "/tmp/daedal/" repo-name)]
+    (.mkdirs obj-dir)
+    {:obj-dir obj-dir}))
 
 ;; gen-class is another way to do it. This makes interactive
 ;; development a bit weird, though.
@@ -92,43 +151,156 @@
       (.read this buf off len)
       buf)))
 
-(def type-name
-  {Constants/OBJ_COMMIT :commit
-   Constants/OBJ_TREE   :tree
-   Constants/OBJ_BLOB   :blob})
-
-(def reverse-type-map
+(def jgit-type
   {:commit Constants/OBJ_COMMIT
    :tree   Constants/OBJ_TREE
    :blob   Constants/OBJ_BLOB})
 
-(defn parse-info
-  [type bits]
-  (case (type-name type)
-    :commit (-> bits RevCommit/parse get-info)
-    :tree   {}
-    :blob   {}))
+(def daedal-type (zipmap (vals jgit-type) (keys jgit-type)))
 
-(defn mem-insert-obj
-  "Inserts an object into the database `db`, returning its new ID."
-  [^ObjectInserter inserter db type data & [off len]]
-  (let [bits (get-bytes data off len)
-        id (.idFor inserter type bits)]
-    (-> db
-        :objects
-        (swap! assoc
-               (.name id)
-               {:id        (.name id)
-                :type      (type-name type)
-                :data      bits
-                :data-type (class data)
-                :info      (parse-info type bits)}))
-    id))
+(defn obj-len
+  "Returns the length in bytes of object named `obj-name` in `metastore`."
+  [metastore obj-name]
+  (ffirst
+   (d/q '[:find ?len
+          :in $ ?obj-name
+          :where
+          [?e :object/sha ?obj-name]
+          [?e :object/len ?len]]
+        (-> metastore :conn d/db)
+        obj-name)))
 
-(defn mem-pack-parser
-  [db object-database in]
+(defn obj-exists?
+  "Returns true if an object named `obj-name` exists in `metastore`."
+  [metastore obj-name]
+  (ffirst
+   (d/q '[:find ?e
+          :in $ ?obj-name
+          :where
+          [?e :object/sha ?obj-name]]
+        (-> metastore :conn d/db)
+        obj-name)))
+
+
+(defn type-partition
+  "Maps a daedal type to the partition where object of that type
+  should live"
+  [type]
+  (or (get {:commit :part/commits
+            :blob   :part/blobs
+            :tag    :part/tags
+            :tree   :part/trees}
+           type)
+      (throw (ex-info "Unable to determine partition for type"
+                      {:reason :no-partition-mapping-defined
+                       :type   type}))))
+
+(defn base-name
+  [^File f]
+  (let [name (.getName f)]
+    (.substring name 0 (.lastIndexOf name "."))))
+
+(defn fill
+  "Read bytes from `in` and put them in `buf`. Throw if `length` bytes
+  cannot be read."
+  [^InputStream in ^bytes buf ^long offset ^long length]
+  (loop [read-previously 0]
+    (let [read-this-time (.read in
+                                buf
+                                (+ offset read-previously)
+                                (- length read-previously))
+          read-so-far (+ read-this-time read-previously)]
+      (cond
+       (= read-so-far length) read-so-far
+       (neg? read-this-time) (throw (ex-info "End of stream reached."
+                                             {:reason :end-of-stream
+                                              :in     in
+                                              :buf    buf
+                                              :offset offset
+                                              :length length}))
+       :else (recur read-so-far)))))
+
+(defn read-int32
+  "Consumes four bytes from `in` and converts them to a long in
+  network byte order."
+  [^InputStream in]
+  (let [buf (byte-array 4)
+        bb (ByteBuffer/allocate 4)
+        read (fill in buf 0 4)]
+    (log/trace "read-long" :read read)
+    (.put bb buf)
+    (.position bb 0)
+    (.getInt bb)))
+
+(defn consume-pack-header
+  [^InputStream in]
+  (let [buf (byte-array 4)]
+    (when-not (and (= 4 (.read in buf 0 4))
+                   (= (into [] buf)
+                      (into [] Constants/PACK_SIGNATURE)))
+      (throw (ex-info "Pack signature incorrect: should be 'PACK'"
+                      {:reason :invalid-pack-signature
+                       :buf buf})))
+    (log/trace "Pack signature is valid")))
+
+(defn read-pack-version
+  [^InputStream in]
+  (let [version (read-int32 in)]
+    (log/trace "Read pack version" :version version)
+    (when-not (= version 2)
+      (throw (ex-info (format "Unsupported pack version: %s" version)
+                      {:reason :unsupported-pack-version
+                       :version version})))
+    version))
+
+(defn read-object-count
+  [^InputStream in]
+  (let [object-count (read-int32 in)]
+    (log/trace "Read object count" :object-count object-count)
+    object-count))
+
+(defn make-pack-parser
+  [metastore ^ObjectDatabase object-database ^InputStream in]
+    (proxy [PackParser] [object-database in]
+      (onAppendBase [type-code data info] (not-implemented))
+      (onBeginOfsDelta [delta-stream-position base-stream-position inflated-size]
+        (not-implemented))
+      (onBeginRefDelta [delta-stream-position base-id inflated-size]
+        (not-implemented))
+      (onBeginWholeObject [stream-position type inflated-size] (not-implemented))
+      (onEndThinPack [] (not-implemented))
+      (onEndWholeObject [^PackedObjectInfo info] (not-implemented))
+      (onInflatedObjectData [^PackedObjectInfo info type-code ^bytes data]
+        (not-implemented))
+      (onObjectData [src raw pos len] (not-implemented))
+      (onObjectHeader [src raw pos len] (not-implemented))
+      (onPackFooter [hash] (not-implemented))
+      (onPackHeader [obj-cnt] (not-implemented))
+      (onStoreStream [raw pos len] (not-implemented))
+      (readDatabase [dst pos cnt] (not-implemented))
+      (seekDatabase [obj-or-delta ^PackParser$ObjectTypeAndSize info] (not-implemented))
+      (parse [^ProgressMonitor receiving
+              ^ProgressMonitor resolving]
+        (log/debug "Entering PackParser.parse")
+        (let [_       (consume-pack-header in)
+              version (read-pack-version in)
+              object-count (read-object-count in)]
+          ;; TODO: Was here
+          )
+        (log/debug "Leaving PackParser.parse"))))
+
+;; Deprecated
+(defn ^:deprecated make-pack-parser-crazy
+  "This is the JGit-compliant version, which is insane. Don't use it."
+  [metastore object-database in]
   (let [state (atom {})
-        crc (java.util.zip.CRC32.)]
+        crc (java.util.zip.CRC32.)
+        temp-file (File/createTempFile "incoming-" ".pack")
+        temp-file-dir (.getParentFile temp-file)
+        temp-pack-file (java.io.RandomAccessFile. temp-file "rw")
+        temp-index-file (File. temp-file-dir (str (base-name temp-file) ".idx"))
+        temp-index-stream (java.io.FileOutputStream. temp-index-file)
+        current-object (atom nil)]
     (proxy [PackParser] [object-database in]
       (onAppendBase [type-code data info]
         (not-implemented))
@@ -137,34 +309,116 @@
       (onBeginRefDelta [delta-stream-position base-id inflated-size]
         (not-implemented))
       (onBeginWholeObject [stream-position type inflated-size]
+        (log/debug "onBeginWholeObject"
+                   :stream-position stream-position
+                   :type (daedal-type type)
+                   :inflated-size inflated-size)
         (.reset crc))
       (onEndThinPack []
         (not-implemented))
-      (onEndWholeObject [info]
-        (not-implemented))
-      (onInflatedObjectData [obj type-code data]
-        (not-implemented))
+      (onEndWholeObject [^PackedObjectInfo info]
+        (log/debug "onEndWholeObject" :info info)
+        (.setCRC info (unchecked-int (.getValue crc))))
+      (onInflatedObjectData [^PackedObjectInfo info type-code ^bytes data]
+          (log/debug "onInflatedObjectData"
+                     :info info
+                     :type (daedal-type type-code)
+                     :obj-name (.name info)
+                     :data data
+                     :len (alength data)))
       (onObjectData [src raw pos len]
+        (log/debug "onObjectData"
+                   :src src
+                   :raw raw
+                   :pos pos
+                   :len len
+                   :string-data (String. raw))
         (.update crc raw pos len))
       (onObjectHeader [src raw pos len]
+        (log/debug "onObjectHeader"
+                   :src src
+                   :raw raw
+                   :pos pos
+                   :len len)
         (.update crc raw pos len))
       (onPackFooter [hash]
-        (not-implemented))
+        (log/debug "onPackFooter"
+                   :hash hash)
+        (swap! state assoc-in [:pack-hash] hash))
       (onPackHeader [obj-cnt]
-        (swap! state assoc :object-count obj-cnt))
+        (log/debug "onPackHeader" :obj-cnt obj-cnt))
       (onStoreStream [raw pos len]
-        (not-implemented))
+        (log/debug "onStoreStream"
+                   :raw raw
+                   :pos pos
+                   :len len)
+        (.write temp-pack-file raw pos len))
       (readDatabase [dst pos cnt]
-        (not-implemented))
-      (seekDatabase [obj info]
+        (log/debug "readDatabase"
+                   :dst dst
+                   :pos pos
+                   :cnt cnt)
+        (.read temp-pack-file dst pos cnt))
+      (seekDatabase [obj-or-delta ^PackParser$ObjectTypeAndSize info]
         ;; Note that there are two two-arity overloads of this method.
-        ;; Need to resolve by type in the body.
-        (not-implemented)))))
+        ;; Need to resolve by type in the body if there are any
+        ;; differences.
+        (.reset crc)
+        (.seek temp-pack-file (.getOffset obj-or-delta))
+        (let [info-out (.readObjectHeader ^PackParser this info)]
+          (log/debug "seekDatabase"
+                     :obj-or-delta obj-or-delta
+                     :info-out info-out)
+          info-out))
+      (parse [^ProgressMonitor receiving
+              ^ProgressMonitor resolving]
+        (log/debug "PackParser.parse" :stage :before-super)
+        (proxy-super parse receiving resolving)
+        (log/debug "PackParser.parse"
+                   :stage :after-super
+                   :temp-pack-file (.getAbsolutePath temp-file)
+                   :state @state)
+        ;; Write the pack index, since it needs to exist on disk for
+        ;; the pack file reader to deal with it
+        (let [objects           (.getSortedObjectList ^PackParser this nil)
+              pack-index-writer (PackIndexWriter/createVersion temp-index-stream 2)]
+          (.write pack-index-writer objects (:pack-hash @state))
+          (-> temp-index-stream .getChannel (.force true)))
 
-(defn mem-object-inserter
-  [object-database storage]
+        ;; TODO: Now, having parsed the packfile, walk over the
+        ;; objects and put them in the bitstore and the database.
+        (dotimes [n (.getObjectCount ^PackParser this)]
+          (let [info (.getObject ^PackParser this n)]
+            (log/debug "PackParser.parse: Processing pack object"
+                       :n n
+                       :info info)))
+        #_(let [obj-store   (:obj-store metastore)
+              daedal-type (daedal-type type-code)
+              obj-name    (.name info)]
+
+          (write-obj obj-store obj-name (ByteArrayInputStream. data))
+          @(d/transact (:conn metastore)
+                       [{:db/id (d/tempid (type-partition daedal-type))
+                         :object/type daedal-type
+                         :object/sha obj-name
+                         :object/len (alength data)
+                         ;; TODO: Others
+                         }]))
+        ;; TODO: Consider delaying the transaction until the end of
+        ;; pack processing, so we can batch up all the necessary
+        ;; writes.
+        ))))
+
+(defn insert-obj
+  "Add an object to the repository"
+  [metastore ^ObjectInserter inserter type data]
+  (not-implemented))
+
+(defn make-object-inserter
+  [metastore obj-db]
   (proxy [ObjectInserter] []
     (flush []
+      (log/debug "ObjectInserter.flush")
       ;; TODO: We could have some sort of pending/active split in the
       ;; DB, but I'm not sure I see much point in a prototype. For
       ;; now, all writes take effect immediately
@@ -176,126 +430,335 @@
       ;; method, which it then calls with the incorrect number of
       ;; arguments. So far this is the only way around this I've
       ;; found: to implement and explitly forward the call.
-      ([type ^bytes data] (mem-insert-obj this storage type data))
-      ([type len in] (mem-insert-obj this storage type in))
-      ([type data off len] (mem-insert-obj this storage type data off len)))
-    (newPackParser [^InputStream in] (mem-pack-parser storage object-database in))
+      ([type ^bytes data] (insert-obj metastore this type data))
+      ([type len in] (insert-obj metastore this type in))
+      ([type data off len] (insert-obj metastore this type data off len)))
+    (newPackParser [^InputStream in]
+      (log/debug "ObjectInserter.newPackParser")
+      (make-pack-parser metastore obj-db in))
     (release [] ; no-op
+      (log/debug "ObjectInserter.release")
       )))
 
-(defn mem-object-loader
-  [storage ^AnyObjectId object-id]
-  (let [obj (-> @storage :objects (get (.name object-id)))]
-    (proxy [ObjectLoader] []
-      (getType [] (-> obj :type reverse-type-map))
-      (getCachedBytes
-        ([] (:data obj))
-        ([size-limit] (if obj
-                        (:data obj)
-                        (do
-                          (log/warn "Couldn't find object"
-                                    :object-id object-id)
-                          (throw (org.eclipse.jgit.errors.MissingObjectException.
-                                  (.copy object-id)
-                                  "unknown"))))))
-      (openStream [] (-> obj :data ByteArrayInputStream.)))))
+(defn- single
+  "Helper function that returns the only thing in a collection. Throws
+  if there is not exactly one."
+  [coll]
+  (or (= 1 (count coll))
+      (throw (ex-info "Collection did not have a single item"
+                      {:reason :collection-not-singular
+                       :coll   coll
+                       :count  (count coll)}))))
 
-(defn mem-object-reader
-  [storage]
+(def rules
+  '[
+    ;; ?descendant descends from ?ancestor iff:
+    ;; They are the same
+    [(descends-from? ?ancestor ?descendant)
+     [(= ?ancestor ?descendant)]]
+    ;; Or ?ancestor is parent of ?descendant
+    [(descends-from? ?ancestor ?descendant)
+     [?descendant :commit/parents ?ancestor]]
+    ;; Or ?descendant's parents are descendants of ?ancestor
+    [(descends-from? ?ancestor ?descendant)
+     [?decendant :commit/parents ?parent]
+     (descends-from? ?ancestor ?parent)]
+
+    ;; Object with ?sha is in ?repo iff ?repo contains an object
+    ;; reachable through one of its refs with that sha.
+    [(repo-object ?repo ?sha)
+     [?ref :ref/repo ?repo]
+     [?ref :ref/target ?target]
+     [?obj :object/sha ?sha]
+     [(descends-from? ?target ?obj)]]])
+
+(defn obj-type
+  "Return the JGit type of an object given its name."
+  [metastore obj-name]
+  (->> (d/q '[:find ?type
+              :in $ % ?repo ?sha
+              :where
+              [(repo-object ?repo ?sha)]
+              [?obj :git/type ?type]]
+            (-> metastore :conn d/db)
+            rules
+            obj-name)
+       single
+       jgit-type))
+
+(defn make-object-stream
+  "Returns an instance of JGit's ObjectStream over the object named by
+  `object-id`."
+  [metastore obj-name]
+  (log/debug "make-object-stream"
+             :metastore metastore
+             :obj-name obj-name)
+  (let [store  (:obj-store metastore)
+        _      (or (obj-exists? metastore obj-name)
+                   (throw (MissingObjectException.
+                           (ObjectId/fromString obj-name)
+                           "unknown")))
+        stream (obj-stream store obj-name)
+        type   (obj-type metastore obj-name)
+        len    (obj-len metastore obj-name)]
+    (proxy [ObjectStream] []
+
+      ;; ObjectStream-specific methods
+      (getSize [] len)
+      (getType [] type)
+
+      ;; InputStream passthrough
+      (available [] (.available stream))
+      (close [] (.close stream))
+      (mark [read-limit] (.mark stream read-limit))
+      (markSupported [] (.markSupported stream))
+      (read
+        ([] (.read stream))
+        ([b] (.read stream b))
+        ([b off len] (.read stream b off len)))
+      (reset [] (.reset stream))
+      (skip [n] (.skip stream n)))))
+
+
+(defn make-object-loader
+  "Creates an instance of JGit's ObjectLoader for an object with the
+  given ID."
+  [metastore ^AnyObjectId object-id]
+  (log/debug "make-object-loader"
+             :metastore metastore
+             :object-id object-id)
+  (let [obj-name               (.name object-id)
+        large-object-threshold 1000000
+        obj-store              (:obj-store metastore)]
+    (proxy [ObjectLoader] []
+      (getType []
+        (log/trace "ObjectLoader.getType" :id obj-name)
+        (obj-type metastore obj-name))
+      (getCachedBytes
+        ([] (.getCachedBytes ^ObjectLoader this large-object-threshold))
+        ([size-limit]
+           (cond
+            (not (obj-exists? metastore obj-name))
+            (do
+              (log/warn "Couldn't find object"
+                        :object-id object-id)
+              (throw (MissingObjectException. (.copy object-id) "unknown")))
+
+            (< size-limit (obj-len metastore obj-name))
+            (throw (org.eclipse.jgit.errors.LargeObjectException. object-id))
+
+            :else
+            (cached-obj-bytes obj-store obj-name))))
+      (openStream []
+        (make-object-stream metastore obj-name)))))
+
+(defn make-object-reader
+  [metastore obj-db]
   (proxy [ObjectReader] []
     (getShallowCommits []
       ;; I'm not sure what shallow commits are, but it looks like they
       ;; can be turned off.
-      #{})
-    (newReader [] (mem-object-reader storage))
+      ;;#{}
+      (not-implemented)
+      )
+    (newReader [] (not-implemented))
     (open
       ([^AnyObjectId object-id]
-         (mem-object-loader storage object-id))
-      ([^AnyObjectId object-id type-int]
-         (.open ^ObjectReader this object-id)))
+         (log/debug "ObjectReader.open" :object-id object-id)
+         (.open ^ObjectReader this object-id ObjectReader/OBJ_ANY))
+      ([^AnyObjectId object-id type-hint]
+         (log/debug "ObjectReader.open"
+                    :object-id object-id
+                    :type-hint type-hint)
+         ;; TODO: This should actually look in the database, not the
+         ;; object store.
+
+         ;; TODO: Throw IncorrectObjectTypeException if the object is
+         ;; not of the specified type.
+         (when-not (obj-exists? metastore (.name object-id))
+           (throw (MissingObjectException. (.copy object-id)
+                                           (if (= type-hint ObjectReader/OBJ_ANY)
+                                             "unknown"
+                                             type-hint))))
+         (make-object-loader metastore object-id)))
     (resolve [^AbbreviatedObjectId id] (not-implemented))))
 
-(defn mem-object-database
-  [storage]
+(defn make-object-database
+  [metastore]
   (proxy [ObjectDatabase] []
-    (close [])                          ; No-op
-    (newInserter [] (mem-object-inserter this storage))
-    (newReader [] (mem-object-reader storage))))
+    (close [])                          ; no-op
+    (newInserter [] (make-object-inserter metastore this))
+    (newReader [] (make-object-reader metastore this))))
 
-(defn mem-ref
-  [r]
+(defn only
+  "Returns the first element from a collection. Throws if there is
+  more than exactly one element."
+  [coll]
+  (if (next coll)
+    (throw (ex-info "Collection contains more than one element."
+                    {:reason :aint-only
+                     :coll   coll}))
+    (first coll)))
+
+(defn make-ref
+  "Creates and returns a JGit Ref object if it can be found in the
+  metastore. Otherwise, returns nil."
+  [metastore ref-name]
+  (let [r (only
+           (d/q '[:find ?ref
+                  :in $ ?repo-name ?ref-name
+                  :where
+                  [?repo :repo/name ?repo-name]
+                  [?ref :ref/repo ?repo]
+                  [?ref :ref/name ?ref-name]]
+                (-> metastore :conn d/db)
+                (:repo-name metastore)
+                ref-name))]
+    (if-not r
+      nil
+      (proxy [Ref] []
+        (getLeaf [] (not-implemented))
+        (getName [] (not-implemented))
+        (getObjectId [] ;;(when-let [id (:id r)] (ObjectId/fromString id))
+          (not-implemented)
+          )
+        (getPeeledObjectId [] (not-implemented))
+        (getStorage [] (not-implemented))
+        (getTarget [] (not-implemented))
+        (isPeeled [] (not-implemented))
+        (isSymbolic [] (not-implemented))))))
+
+(defn make-new-ref
+  "Return an instance of Ref that points to `object-id`. The
+  referenced object that may not yet exist, in which case `nil` is
+  acceptable for `object-id`."
+  [ref-name object-id]
   (proxy [Ref] []
-    (getLeaf [] this)
-    (getName [] (:name r))
-    (getObjectId [] (when-let [id (:id r)] (ObjectId/fromString id)))
+    (getLeaf [] (not-implemented))
+    (getName [] ref-name)
+    (getObjectId [] object-id)
     (getPeeledObjectId [] (not-implemented))
     (getStorage [] (not-implemented))
     (getTarget [] (not-implemented))
     (isPeeled [] (not-implemented))
     (isSymbolic [] (not-implemented))))
 
-(defn mem-ref-update
-  [^RefDatabase ref-db db repo ref-name]
-  (proxy [RefUpdate] [(or (.getRef ref-db ref-name)
-                          (mem-ref {:name ref-name}))]
+(defn make-ref-update
+  [metastore ^Repository repo ^RefDatabase ref-db ref-name]
+  (proxy [RefUpdate] [(or (make-ref metastore ref-name)
+                          (make-new-ref ref-name nil))]
     (doDelete [desired-result] (not-implemented))
     (doLink [target] (not-implemented))
     (doUpdate [desired-result]
-      (let [refs ^ConcurrentHashMap (:refs db)]
-        (-> refs (.put ref-name {:name ref-name
-                                 :id (-> ^RefUpdate this .getNewObjectId .name)})))
-      desired-result)
+      (let [new-id   (.getNewObjectId this)
+            old-id   (.getOldObjectId this)]
+        (log/debug "RefUpdate.doUpdate"
+                   :new-id new-id
+                   :old-id old-id
+                   :ref-name ref-name)
+        (when old-id
+          (throw (ex-info "No support yet for changes to existing refs"
+                          {:reason :ref-change-not-supported
+                           :new-id new-id
+                           :old-id old-id
+                           :ref-name ref-name})))
+        (let [conn       (:conn metastore)
+              object-eid (only
+                          (d/q '[:find ?object-eid
+                                 :in $ ?object-name
+                                 :where
+                                 [?object-eid :object/sha ?object-name]]
+                               (d/db conn)
+                               (.getName new-id)))
+              repo-eid   (only
+                          (d/q '[:find ?repo
+                                 :in $ ?repo-name
+                                 :where
+                                 [?repo :repo/name ?repo-name]]
+                               (d/db conn)
+                               (:repo-name metastore)))]
+          (log/debug "RefUpdate.doUpdate transacting"
+                     :ref/name ref-name
+                     :ref/repo repo-eid
+                     :ref/target object-eid)
+          @(d/transact conn
+                       [{:db/id      (d/tempid :part/refs)
+                         :ref/name   ref-name
+                         :ref/repo   repo-eid
+                         :ref/target object-eid}])))
+      RefUpdate$Result/NEW)
     (getRefDatabase [] ref-db)
     (getRepository [] repo)
     (tryLock [deref?]
-      ;; TODO: Always succeeds for now
-      true
-      )
+      ;; We handle concurrency in the database and by using a better
+      ;; language, so we should be able to allow concurrent access
+      ;; regardless.
+      true)
     (unlock []
-      ;; TODO: no-op for now
-      ;;(not-implemented)
+      ;; No-op. Implement if necessary.
       )))
 
-(defn get-refs
-  [storage db repo ^String prefix]
-  (or (empty? prefix)
-      (.endsWith prefix "/")
-      (throw (ex-info "Invalid prefix: must be empty or end with slash"
-                      {:reason :invalid-prefix
-                       :prefix prefix})))
-  (->> db
-       :refs
-       (filter (fn [[^String n r]] (.startsWith n prefix)))
-       (map (fn [[n r]] [(subs n (.length prefix)) r]))
-       (into {})
-       ConcurrentHashMap.))
+(defn make-ref-map
+  "A mutable map of ref names to Ref objects"
+  [metastore]
+  (let [ref-data (atom {})]
+   (proxy [java.util.Map] []
+     (clear [] (reset! ref-data {}))
+     (containsKey [k] (contains? @ref-data k))
+     (containsValue [v] (boolean (some #{v} (vals @ref-data))))
+     (entrySet [] (set @ref-data))
+     (get [k] (get @ref-data k))
+     (isEmpty [] (empty? @ref-data))
+     (keySet [] (set (keys @ref-data)))
+     ;; TODO: Do we need to write through to the database when this
+     ;; gets updated?
+     (put [k v] (swap! ref-data assoc k v))
+     (putAll [t] (swap! ref-data merge t))
+     (remove [k] (swap! ref-data dissoc k))
+     (size [] (count @ref-data))
+     ;; When ref-data is empty, vals returns nil, but code calling
+     ;; this doesn't like that very much. So we return an empty
+     ;; collection.
+     (values [] (or (vals @ref-data) [])))))
 
-(defn mem-ref-database
-  [storage db repo]
+(defn make-ref-database
+  [metastore ^Repository repo]
   (proxy [RefDatabase] []
-    (close [])                          ; No-op
+    (close [])                          ; no-op
     (create [] (not-implemented))
     (getAdditionalRefs [] (not-implemented))
-    (getRef [name] (some-> @storage :refs (get name) mem-ref))
-    (getRefs [prefix] (get-refs storage db repo prefix))
+    (getRef [name]
+      (log/debug "RefDatabase.getRef"
+                 :name name))
+    (getRefs [prefix] (make-ref-map metastore))
     (isNameConflicting [name]
-      ;; TODO: This isn't right - we have to disallow
+      ;; TODO: We have to disallow
       ;; refs/heads/master/blah if refs/heads/master already exists,
       ;; and vice-versa.
-      (let [refs ^ConcurrentHashMap (:refs @storage)]
-        (.containsKey refs name)))
+      (not-implemented))
     (newRename [from-name to-name] (not-implemented))
     (newUpdate [name detach?]
+      (log/debug "RefDatabase.newUpdate"
+                 :name name
+                 :detach? detach?)
+      ;; TODO: Deal with symbolic refs properly
       (when detach? (not-implemented))
-      (mem-ref-update this db repo name))
+      (make-ref-update metastore repo this name))
     (peel [ref] (not-implemented))))
 
 (defn mem-repo-builder
   []
-  (proxy [RepositoryBuilder] []))
+  (proxy [RepositoryBuilder] []
+    (setup [] (not-implemented))
+    (build [] (not-implemented))
+    (setGitDir [^File git-dir] (not-implemented))
+    (setObjectDirectory [^File object-directory] (not-implemented))
+    (addAlternateObjectDirectory [^File other] (not-implemented))
+    (setWorkTree [^File work-tree] (not-implemented))
+    (setIndexFile [^File index-file] (not-implemented))))
 
-(defn mem-stored-config
-  []
+(defn make-stored-config
+  [metastore]
   (proxy [StoredConfig] []
     (load [] (not-implemented))
     (save [] (not-implemented))
@@ -323,15 +786,17 @@
                       :result result)
            result)))))
 
-(defn ^Repository mem-repo
-  [uri repo-name]
-  (let [conn (not-implemented)
-        db   (mem-object-database conn)]
+(defn ^Repository make-repo
+  [repo-name datomic]
+  (let [metastore {:conn      (-> datomic :uri d/connect)
+                   :repo-name repo-name
+                   :obj-store (file-obj-store repo-name)}
+        obj-db    (make-object-database metastore)]
     (proxy [Repository] [(mem-repo-builder)]
       (create [bare?] (not-implemented))
-      (getConfig [] (not-implemented))
-      (getObjectDatabase [] db)
-      (getRefDatabase [] (not-implemented))
+      (getConfig [] (make-stored-config metastore))
+      (getObjectDatabase [] obj-db)
+      (getRefDatabase [] (make-ref-database metastore this))
       (getReflogReader [^String ref-name] (not-implemented))
       (notifyIndexChanged [] (not-implemented))
       (scanForRepoChanges [] (not-implemented)))))

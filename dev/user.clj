@@ -11,7 +11,7 @@
             [datomic.api :as d]
             [daedal.common :as com]
             [daedal.datomic :as datomic]
-            [daedal.git :refer :all]
+            [daedal.git :refer :all :as git]
             [daedal.system-instance :as system-instance])
   (:refer-clojure :exclude [methods])
   (:import [java.io ByteArrayInputStream]
@@ -40,21 +40,14 @@
 
 ;;; Development-time components
 
-;; TODO: Maybe make this a component of its own
-(def repos (atom {}))
-
 (defn create-jetty-server
-  [^long port]
+  [^long port datomic]
   (let [server        (Server. port)
         repo-resolver (reify org.eclipse.jgit.transport.resolver.RepositoryResolver
                         (open [this req name]
                           (log/debug {:method :repository-resolver/open
                                       :name name})
-                          (if-let [{:keys [repo]} (get name @repos)]
-                            repo
-                            (let [r (mem-repo)]
-                              (swap! repos assoc name r)
-                              (:repo r)))))
+                          (make-repo name datomic)))
         upack-factory (proxy [org.eclipse.jgit.transport.resolver.UploadPackFactory] []
                         (create [req repo]
                           (log/debug {:method :upload-pack-factory/create
@@ -79,14 +72,14 @@
 
 (defn jetty-server
   "Returns a Lifecycle wrapper around embedded Jetty for development."
-  [port]
+  [port datomic]
   (let [server (atom nil)]
     (reify component/Lifecycle
       (start [_]
         (when-not @server
           (log/info :STARTING "jetty" :port port)
           (reset! server
-                  (create-jetty-server port))
+                  (create-jetty-server port datomic))
           (.start ^Server @server)
           (log/info :STARTED "jetty" :port port)))
       (stop [_]
@@ -107,6 +100,13 @@
   (stop [this]
     (component/stop-system this dev-system-components)))
 
+(defn create-repo
+  "Creates an empty repo named `name` in the database."
+  [conn repo-name repo-description]
+  @(d/transact conn [{:db/id            (d/tempid :part/repos)
+                     :repo/name        repo-name
+                     :repo/description repo-description}]))
+
 (defn dev-system
   "Returns a complete system in :dev mode for development at the REPL.
   Options are key-value pairs from:
@@ -115,17 +115,29 @@
   [& {:keys [port]
       :or {port 9900}
       :as options}]
-  (let [jetty      (jetty-server port)
-        schema-str (-> "daedal/schema.edn"
+  (let [schema-str (-> "daedal/schema.edn"
                        io/resource
                        slurp)
         schema     (read-string schema-str)
         schema-id  (com/digest schema-str)
-        datomic    (datomic/temp-peer schema schema-id)]
+        datomic    (datomic/temp-peer schema schema-id)
+        jetty      (jetty-server port datomic)]
     ;; TODO: If we start to have dependencies, make use of component/using
     (map->DevSystem {:jetty   jetty
                      :datomic datomic
                      :options options})))
+
+;;; Access to dev-time datomic database
+
+(defn conn
+  []
+  "A connection to the dev database"
+  (-> system-instance/system :datomic :uri d/connect))
+
+(defn db
+  "The latest available value of the dev database"
+  []
+  (d/db (conn)))
 
 ;;; Development system lifecycle
 
@@ -144,6 +156,9 @@
   (let [options (or options default-options)]
     (when-not system-instance/system (apply init options)))
   (component/start system-instance/system)
+  (log/debug "go"
+             :uri (-> system-instance/system :datomic :uri))
+  (create-repo (conn) "bar" "Test repo")
   (set! *print-length* 20)
   :started)
 
@@ -161,20 +176,6 @@
   []
   (stop)
   (refresh :after 'user/go))
-
-;;; Datomic helpers
-
-(defn conn
-  "Returns a connection to the dev database"
-  []
-  (-> system-instance/system :datomic :uri d/connect))
-
-(defn db
-  "Returns the current value of the dev database"
-  []
-  (d/db (conn)))
-
-;;; Utility methods
 
 (defn methods
   [^Class c]

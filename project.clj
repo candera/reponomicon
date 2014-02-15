@@ -10,6 +10,8 @@
                   :exclusions [org.slf4j/slf4j-nop
                                org.slf4j/slf4j-log4j12]]
 
+                 [com.google.guava/guava "16.0"]
+
                  [com.stuartsierra/component "0.2.1"]
 
                  [ch.qos.logback/logback-classic "1.0.13"]
@@ -35,4 +37,5 @@
                         [org.clojure/tools.trace "0.7.6"]]
          :jvm-opts     ["-Xdebug"
                         "-Xrunjdwp:transport=dt_socket,server=y,suspend=n,address=9901"]
+         :repl-options {:init-ns user}
          :source-paths ["dev"]}})
