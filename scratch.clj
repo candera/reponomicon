@@ -129,3 +129,48 @@
       .iterator
       (into [])
       (pprint)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Working with stupid packfiles directly
+
+(defn read-object
+  [^java.io.InputStream is]
+  (let [[type length] (read-type-and-length is)
+        _ (println "Type/inflated length" type "/" length)
+        inflater (java.util.zip.Inflater.)
+        inflated-buf (byte-array (* length 2))
+        deflated-buf (byte-array 1)
+        deflated-read (atom 0)]
+    (println "Read this many:"
+             (loop [inflated-read 0]
+               (if (.finished inflater)
+                 (do
+                   (println "Finished?" (.finished inflater))
+                   (println "Compressed bytes read" (.getBytesRead inflater))
+                   inflated-read)
+                 (do
+                   (when (.needsInput inflater)
+                     (.read is deflated-buf 0 1)
+                     (swap! deflated-read inc)
+                     (.setInput inflater deflated-buf))
+                   (recur (+ inflated-read (.inflate inflater
+                                                     inflated-buf
+                                                     inflated-read
+                                                     1)))))))
+    (println "Deflated read" @deflated-read)))
+
+
+;; Correct output (type/inflated/compressed)
+;; :commit 185 122?
+;; :tree 38 
+;; :blob 3 ??
+
+(let [is (java.io.FileInputStream. "/var/folders/g4/cjxsxcpd4n511t1h5m78m29m0000gn/T/incoming-2978041386142027054.pack")]
+  (consume-pack-header is)
+  (let [version (read-pack-version is)
+        object-count (read-object-count is)]
+    (println "Version" version)
+    (println "Object count" object-count)
+    (dotimes [_ object-count]
+      (read-object is))))

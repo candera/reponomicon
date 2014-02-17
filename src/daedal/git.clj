@@ -259,39 +259,102 @@
     (log/trace "Read object count" :object-count object-count)
     object-count))
 
+(def type-from-num
+  {Constants/OBJ_COMMIT :commit
+   Constants/OBJ_TREE :tree
+   Constants/OBJ_BLOB :blob
+   Constants/OBJ_TAG :tag
+   Constants/OBJ_OFS_DELTA :ofs-delta
+   Constants/OBJ_REF_DELTA :ref-delta})
+
+(defn read-type-and-length
+  [^InputStream in]
+  (let [b0 (.read in)
+        type (-> b0 (bit-and 0x70) (bit-shift-right 4) type-from-num)
+        initial-length (long (bit-and b0 0x0F))]
+    (when (neg? b0)
+      (throw (ex-info "Unexpected end of file"
+                      {:reason :unexpected-eof})))
+    (if-not (bit-test b0 7)
+      [type initial-length]
+      (do
+        (log/trace "Reading type and length" :byte b0)
+        (loop [length initial-length
+               shift 4
+               next-b (.read in)]
+          (when (neg? next-b)
+            (throw (ex-info "Unexpected end of file"
+                            {:reason :unexpected-eof})))
+          (log/trace "Reading type and length" :byte next-b)
+          (let [new-length (-> next-b (bit-and 0x7f) (bit-shift-left shift) (+ length))]
+            (if (bit-test next-b 7)
+              (recur new-length (+ shift 7) (.read in))
+              [type new-length])))))))
+
+(defn skip-compressed
+  "Reads compressed bytes from `in` until done."
+  [^InputStream in]
+  ;; For now we just skip them. Later we'll do something with them.
+  (log/trace "Skipping over compressed data")
+  ;; This is not the world's most efficient way to do this, one byte
+  ;; at a time. If this turns out to be slow, one approach would be to
+  ;; use a BufferedStream, reading chunks of `in` at a time until
+  ;; we're done. If we overshoot the end of the compressed region, we
+  ;; can use (.getBytesRead inflater) to figure out how much to back
+  ;; up, and a .mark/.reset on the BufferedStream to get there.
+  (let [inflater (java.util.zip.Inflater.)
+        inflated-buf (byte-array 1024)
+        deflated-buf (byte-array 1)]
+    (loop []
+      (when-not (.finished inflater)
+        (when (.needsInput inflater)
+          (.read in deflated-buf 0 1)
+          (.setInput inflater deflated-buf))
+        (.inflate inflater inflated-buf 0 1)
+        (recur)))))
+
 (defn make-pack-parser
   [metastore ^ObjectDatabase object-database ^InputStream in]
-    (proxy [PackParser] [object-database in]
-      (onAppendBase [type-code data info] (not-implemented))
-      (onBeginOfsDelta [delta-stream-position base-stream-position inflated-size]
-        (not-implemented))
-      (onBeginRefDelta [delta-stream-position base-id inflated-size]
-        (not-implemented))
-      (onBeginWholeObject [stream-position type inflated-size] (not-implemented))
-      (onEndThinPack [] (not-implemented))
-      (onEndWholeObject [^PackedObjectInfo info] (not-implemented))
-      (onInflatedObjectData [^PackedObjectInfo info type-code ^bytes data]
-        (not-implemented))
-      (onObjectData [src raw pos len] (not-implemented))
-      (onObjectHeader [src raw pos len] (not-implemented))
-      (onPackFooter [hash] (not-implemented))
-      (onPackHeader [obj-cnt] (not-implemented))
-      (onStoreStream [raw pos len] (not-implemented))
-      (readDatabase [dst pos cnt] (not-implemented))
-      (seekDatabase [obj-or-delta ^PackParser$ObjectTypeAndSize info] (not-implemented))
-      (parse [^ProgressMonitor receiving
-              ^ProgressMonitor resolving]
-        (log/debug "Entering PackParser.parse")
-        (let [_       (consume-pack-header in)
-              version (read-pack-version in)
-              object-count (read-object-count in)]
-          ;; TODO: Was here
-          )
-        (log/debug "Leaving PackParser.parse"))))
+  (proxy [PackParser] [object-database in]
+    (onAppendBase [type-code data info] (not-implemented))
+    (onBeginOfsDelta [delta-stream-position base-stream-position inflated-size]
+      (not-implemented))
+    (onBeginRefDelta [delta-stream-position base-id inflated-size]
+      (not-implemented))
+    (onBeginWholeObject [stream-position type inflated-size] (not-implemented))
+    (onEndThinPack [] (not-implemented))
+    (onEndWholeObject [^PackedObjectInfo info] (not-implemented))
+    (onInflatedObjectData [^PackedObjectInfo info type-code ^bytes data]
+      (not-implemented))
+    (onObjectData [src raw pos len] (not-implemented))
+    (onObjectHeader [src raw pos len] (not-implemented))
+    (onPackFooter [hash] (not-implemented))
+    (onPackHeader [obj-cnt] (not-implemented))
+    (onStoreStream [raw pos len] (not-implemented))
+    (readDatabase [dst pos cnt] (not-implemented))
+    (seekDatabase [obj-or-delta ^PackParser$ObjectTypeAndSize info] (not-implemented))
+    (parse [^ProgressMonitor receiving
+            ^ProgressMonitor resolving]
+      (log/debug "Entering PackParser.parse")
+      (let [_       (consume-pack-header in)
+            version (read-pack-version in)
+            object-count (read-object-count in)]
+        (dotimes [obj-num object-count]
+          (let [[type length] (read-type-and-length in)]
+            (log/trace "Read object header" :type type :length length)
+            (cond
+             ;; Just skip over it for now - later we'll do something with it
+             (#{:commit :tree :blob} type) (skip-compressed in)
 
-;; Deprecated
-(defn ^:deprecated make-pack-parser-crazy
-  "This is the JGit-compliant version, which is insane. Don't use it."
+             :else (throw (ex-info "Unsupported object type"
+                                   {:reason :unsupported-object-type
+                                    :type type
+                                    :length length}))))))
+      (log/debug "Leaving PackParser.parse"))))
+
+(defn ^:deprecated make-jgit-pack-parser
+  "This is the JGit-compliant version, which is somewhat insane. Not
+  sure I want to use it."
   [metastore object-database in]
   (let [state (atom {})
         crc (java.util.zip.CRC32.)
@@ -435,7 +498,9 @@
       ([type data off len] (insert-obj metastore this type data off len)))
     (newPackParser [^InputStream in]
       (log/debug "ObjectInserter.newPackParser")
-      (make-pack-parser metastore obj-db in))
+      ;;(make-jgit-pack-parser metastore obj-db in)
+      (make-pack-parser metastore obj-db in)
+      )
     (release [] ; no-op
       (log/debug "ObjectInserter.release")
       )))
