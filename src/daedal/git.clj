@@ -352,18 +352,14 @@
                                     :length length}))))))
       (log/debug "Leaving PackParser.parse"))))
 
-(defn ^:deprecated make-jgit-pack-parser
+(defn make-jgit-pack-parser
   "This is the JGit-compliant version, which is somewhat insane. Not
   sure I want to use it."
   [metastore object-database in]
   (let [state (atom {})
         crc (java.util.zip.CRC32.)
         temp-file (File/createTempFile "incoming-" ".pack")
-        temp-file-dir (.getParentFile temp-file)
-        temp-pack-file (java.io.RandomAccessFile. temp-file "rw")
-        temp-index-file (File. temp-file-dir (str (base-name temp-file) ".idx"))
-        temp-index-stream (java.io.FileOutputStream. temp-index-file)
-        current-object (atom nil)]
+        temp-pack-file (java.io.RandomAccessFile. temp-file "rw")]
     (proxy [PackParser] [object-database in]
       (onAppendBase [type-code data info]
         (not-implemented))
@@ -376,19 +372,28 @@
                    :stream-position stream-position
                    :type (daedal-type type)
                    :inflated-size inflated-size)
+        (swap! state #(-> %
+                          (assoc-in [:current :offset] stream-position)
+                          (assoc-in [:current :type] (daedal-type type))
+                          (assoc-in [:current :inflated-size] inflated-size)))
         (.reset crc))
       (onEndThinPack []
         (not-implemented))
       (onEndWholeObject [^PackedObjectInfo info]
         (log/debug "onEndWholeObject" :info info)
+        (swap! state #(-> %
+                          (assoc-in [:objects (.name info)] (:current %))
+                          (dissoc :current)))
         (.setCRC info (unchecked-int (.getValue crc))))
       (onInflatedObjectData [^PackedObjectInfo info type-code ^bytes data]
-          (log/debug "onInflatedObjectData"
-                     :info info
-                     :type (daedal-type type-code)
-                     :obj-name (.name info)
-                     :data data
-                     :len (alength data)))
+        (log/debug "onInflatedObjectData"
+                   :info info
+                   :type (daedal-type type-code)
+                   :obj-name (.name info)
+                   :data data
+                   :len (alength data))
+        (swap! state #(-> %
+                          (assoc-in [:objects (.name info) :data] data))))
       (onObjectData [src raw pos len]
         (log/debug "onObjectData"
                    :src src
@@ -441,35 +446,20 @@
                    :stage :after-super
                    :temp-pack-file (.getAbsolutePath temp-file)
                    :state @state)
-        ;; Write the pack index, since it needs to exist on disk for
-        ;; the pack file reader to deal with it
-        (let [objects           (.getSortedObjectList ^PackParser this nil)
-              pack-index-writer (PackIndexWriter/createVersion temp-index-stream 2)]
-          (.write pack-index-writer objects (:pack-hash @state))
-          (-> temp-index-stream .getChannel (.force true)))
 
-        ;; TODO: Now, having parsed the packfile, walk over the
-        ;; objects and put them in the bitstore and the database.
-        (dotimes [n (.getObjectCount ^PackParser this)]
-          (let [info (.getObject ^PackParser this n)]
-            (log/debug "PackParser.parse: Processing pack object"
-                       :n n
-                       :info info)))
-        #_(let [obj-store   (:obj-store metastore)
-              daedal-type (daedal-type type-code)
-              obj-name    (.name info)]
+        (doseq [[k {:keys [inflated-size type offset data]}] (:objects @state)]
+          (log/trace "Object found"
+                     :inflated-size inflated-size
+                     :type type
+                     :offset offset
+                     :data (if data (String. data 0 inflated-size) nil)))
 
-          (write-obj obj-store obj-name (ByteArrayInputStream. data))
-          @(d/transact (:conn metastore)
-                       [{:db/id (d/tempid (type-partition daedal-type))
-                         :object/type daedal-type
-                         :object/sha obj-name
-                         :object/len (alength data)
-                         ;; TODO: Others
-                         }]))
-        ;; TODO: Consider delaying the transaction until the end of
-        ;; pack processing, so we can batch up all the necessary
-        ;; writes.
+        ;; TODO: Now, having parsed the packfile and built an index in
+        ;; @state, we can write out any objects that we need to,
+        ;; potentially pulling their data from the packfile, if it
+        ;; isn't already stored.
+
+        ;; TODO: Get rid of the temp packfile
         ))))
 
 (defn insert-obj
@@ -498,8 +488,8 @@
       ([type data off len] (insert-obj metastore this type data off len)))
     (newPackParser [^InputStream in]
       (log/debug "ObjectInserter.newPackParser")
-      ;;(make-jgit-pack-parser metastore obj-db in)
-      (make-pack-parser metastore obj-db in)
+      (make-jgit-pack-parser metastore obj-db in)
+      ;;(make-pack-parser metastore obj-db in)
       )
     (release [] ; no-op
       (log/debug "ObjectInserter.release")
