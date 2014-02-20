@@ -408,6 +408,8 @@
                    :raw raw
                    :pos pos
                    :len len)
+        (swap! state #(-> %
+                          (assoc-in [:current :header-length] len)))
         (.update crc raw pos len))
       (onPackFooter [hash]
         (log/debug "onPackFooter"
@@ -447,14 +449,42 @@
                    :temp-pack-file (.getAbsolutePath temp-file)
                    :state @state)
 
-        (doseq [[k {:keys [inflated-size type offset data]}] (:objects @state)]
+        ;; Write the object data into the object store
+        (doseq [[sha {:keys [inflated-size
+                             header-length
+                             type
+                             offset
+                             data]}] (:objects @state)]
           (log/trace "Object found"
                      :inflated-size inflated-size
                      :type type
                      :offset offset
-                     :data (if data (String. data 0 inflated-size) nil)))
+                     :data (if data (String. data 0 inflated-size) nil))
+          (log/trace "Writing object to object store"
+                     :sha sha
+                     :type type)
+          (write-obj (:obj-store metastore)
+                     sha
+                     (if data
+                       (java.io.ByteArrayInputStream. data)
+                       (java.util.zip.InflaterInputStream.
+                        (java.nio.channels.Channels/newInputStream
+                         (-> temp-pack-file
+                             .getChannel
+                             (.position (+ offset header-length))))))))
 
-        ;; TODO: Now, having parsed the packfile and built an index in
+        ;; TODO: Write the object metadata to Datomic
+        #_(->> @state
+               :objects
+               (map (fn [[sha {:keys [inflated-size type offset data]}]]
+                      (object-txdata
+                       sha
+                       type
+                       inflated-size
+                       data)))
+               )
+
+        ;; Now, having parsed the packfile and built an index in
         ;; @state, we can write out any objects that we need to,
         ;; potentially pulling their data from the packfile, if it
         ;; isn't already stored.

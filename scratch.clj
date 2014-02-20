@@ -174,3 +174,10 @@
     (println "Object count" object-count)
     (dotimes [_ object-count]
       (read-object is))))
+
+(let [raf (java.io.RandomAccessFile. "/var/folders/g4/cjxsxcpd4n511t1h5m78m29m0000gn/T/incoming-2978041386142027054.pack" "rw")
+      is (java.nio.channels.Channels/newInputStream (-> raf .getChannel (.position 14)))
+      iis (java.util.zip.InflaterInputStream. is)
+      buf (byte-array 185)]
+  (.read iis buf 0 185)
+  (String. buf))
