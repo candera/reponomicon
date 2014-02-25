@@ -181,3 +181,11 @@
       buf (byte-array 185)]
   (.read iis buf 0 185)
   (String. buf))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(let [fis (java.io.FileInputStream. "/tmp/daedal/bar/46a4b264acba7c2e835339e505bf3e91ecf40b39")
+      buf (byte-array 1000)
+      n (.read fis buf)
+      data (java.util.Arrays/copyOf buf n)]
+  (parse-tree data))

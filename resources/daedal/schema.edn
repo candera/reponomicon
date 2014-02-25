@@ -58,14 +58,14 @@
   [:user/part :part/commits
    "Partition for commit entities"]
 
-  [:user/part :part/blobs
-   "Partition for blob entities"]
-
   [:user/part :part/tags
    "Partition for tag entites"]
 
-  [:user/part :part/trees
-   "Partition for tree entities"]
+  [:user/part :part/trees-and-blobs
+   "Partition for tree and blob entities"]
+
+  [:user/part :part/tree-nodes
+   "Partition for tree node entities"]
 
   [:user/part :part/refs
    "Partition for ref entities"]
@@ -138,15 +138,19 @@
    {:db/index true}
    "Timestamp of commit"]
 
-  [:user/attr :node/filename :string
+  [:user/attr :tree-node/path :string
    {:db/index true}
-   "filename of a tree node"]
+   "Path of a tree node"]
 
-  [:user/attr :node/parent :ref
+  [:user/attr :tree-node/mode :string
    {}
-   "Parent of a tree node"]
+   "File mode of a tree node"]
+
+  [:user/attr :tree-node/tree :ref
+   {}
+   "Tree that holds this tree node"]
 
   ;; I'm not sure we need this one.
-  [:user/attr :node/object :ref
+  [:user/attr :tree-node/object :ref
    {}
    "Git object (tree/blob) in a tree node"]]]

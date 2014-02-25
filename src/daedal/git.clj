@@ -1,6 +1,7 @@
 (ns daedal.git
   "Implementation of git repo"
   (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.tools.logging :as log]
             [datomic.api :as d])
   (:import [com.google.common.io
@@ -181,7 +182,6 @@
         (-> metastore :conn d/db)
         obj-name)))
 
-
 (defn type-partition
   "Maps a daedal type to the partition where object of that type
   should live"
@@ -352,6 +352,105 @@
                                     :length length}))))))
       (log/debug "Leaving PackParser.parse"))))
 
+(defn parse-commit
+  "Return a structured representation of a commit given its raw bytes."
+  [data]
+  (let [text (String. data)
+        trim-email (fn [s] (subs s 1 (dec (count s))))
+        dt (fn [ds] (java.util.Date. (* 1000 (Integer/parseInt ds))))
+        [tree parents author committer msg]
+        (let [lines (str/split text #"\n")
+              slines (mapv #(str/split % #"\s") lines)
+              tree (-> slines (nth 0) (nth 1))
+              [plines xs] (split-with #(= (nth % 0) "parent") (rest slines))]
+          [tree
+           (seq (map second plines))
+           (vec (reverse (first xs)))
+           (vec (reverse (second xs)))
+           (->> lines
+                (drop-while #(not= % ""))
+                rest
+                (interpose "\n")
+                (apply str))])]
+    {:msg msg
+     :tree tree
+     :parents parents
+     :author (trim-email (author 2))
+     :authored (dt (author 1))
+     :committer (trim-email (committer 2))
+     :committed (dt (committer 1))}))
+
+(defn format-sha
+  "Turn a 20-byte region of a byte array into a string sha."
+  [buf offset]
+  (->> (range 20)
+       (map #(format "%02x" (aget buf (+ offset %))))
+       (apply str)))
+
+(defn parse-tree
+  "Return a structed representation of a tree given its raw bytes."
+  [data]
+  (loop [start 0
+         i 0
+         entries []]
+    (if (>= i (alength data))
+      entries
+      (if (zero? (aget data i))
+        (let [text (String. data start (- i start))
+              [mode path] (str/split text #"\s")
+              sha (format-sha data (inc i))]
+          (recur (+ i 20)
+                 (+ i 20)
+                 (conj entries {:mode mode :path path :sha sha})))
+        (recur start (inc i) entries)))))
+
+(defmulti object-txdata
+  "Return transaction data based on object data."
+  (fn [sha type data-or-size] type))
+
+(defmethod object-txdata :commit
+  [sha type data]
+  (let [{:keys [msg tree parents author authored committer committed]}
+        (parse-commit data)]
+    [{:db/id              (d/tempid :part/commits)
+      :object/type        :commit
+      :object/sha         sha
+      :object/len         (alength data)
+      :commit/parents     (->> parents
+                               (map (fn [parent-sha] [:object/sha parent-sha]) parents)
+                               set)
+      :commit/author      author
+      :commit/authoredAt  authored
+      :commit/committer   committer
+      :commit/committedAt committed}]))
+
+(defmethod object-txdata :tree
+  [tree-sha type data]
+  (let [tree-eid (d/tempid :part/trees-and-blobs)]
+    (->> data
+         parse-tree
+         (mapcat (fn [{:keys [mode path sha]}]
+                   (let [obj-eid (d/tempid :part/trees-and-blobs)]
+                     [{:db/id      obj-eid
+                       :object/sha sha}
+                      {:db/id            (d/tempid :part/tree-nodes)
+                       :tree-node/mode   mode
+                       :tree-node/path   path
+                       :tree-node/tree   tree-eid
+                       :tree-node/object obj-eid}])))
+         (into
+          [{:db/id       tree-eid
+            :object/type :tree
+            :object/sha  tree-sha
+            :object/len  (alength data)}]))))
+
+(defmethod object-txdata :blob
+  [sha type inflated-size]
+  [{:db/id       (d/tempid :part/trees-and-blobs)
+    :object/type :blob
+    :object/sha  sha
+    :object/len  inflated-size}])
+
 (defn make-jgit-pack-parser
   "This is the JGit-compliant version, which is somewhat insane. Not
   sure I want to use it."
@@ -473,23 +572,20 @@
                              .getChannel
                              (.position (+ offset header-length))))))))
 
-        ;; TODO: Write the object metadata to Datomic
-        #_(->> @state
-               :objects
-               (map (fn [[sha {:keys [inflated-size type offset data]}]]
-                      (object-txdata
-                       sha
-                       type
-                       inflated-size
-                       data)))
-               )
+        ;; Write the object metadata into Datomic
+        (->> @state
+             :objects
+             (mapcat (fn [[sha {:keys [type data inflated-size]}]]
+                       (object-txdata sha type (or data inflated-size))))
+             (d/transact (:conn metastore))
+             deref)
 
-        ;; Now, having parsed the packfile and built an index in
-        ;; @state, we can write out any objects that we need to,
-        ;; potentially pulling their data from the packfile, if it
-        ;; isn't already stored.
+        ;; Get rid of the temp packfile
+        (.close temp-pack-file)
+        (.delete temp-file)
 
-        ;; TODO: Get rid of the temp packfile
+        ;; Don't do any locking for now
+        nil
         ))))
 
 (defn insert-obj
@@ -748,20 +844,22 @@
                            :old-id old-id
                            :ref-name ref-name})))
         (let [conn       (:conn metastore)
-              object-eid (only
-                          (d/q '[:find ?object-eid
-                                 :in $ ?object-name
-                                 :where
-                                 [?object-eid :object/sha ?object-name]]
-                               (d/db conn)
-                               (.getName new-id)))
-              repo-eid   (only
-                          (d/q '[:find ?repo
-                                 :in $ ?repo-name
-                                 :where
-                                 [?repo :repo/name ?repo-name]]
-                               (d/db conn)
-                               (:repo-name metastore)))]
+              object-eid (-> (d/q '[:find ?object-eid
+                                    :in $ ?object-name
+                                    :where
+                                    [?object-eid :object/sha ?object-name]]
+                                  (d/db conn)
+                                  (.getName new-id))
+                             only
+                             only)
+              repo-eid   (-> (d/q '[:find ?repo
+                                    :in $ ?repo-name
+                                    :where
+                                    [?repo :repo/name ?repo-name]]
+                                  (d/db conn)
+                                  (:repo-name metastore))
+                             only
+                             only)]
           (log/debug "RefUpdate.doUpdate transacting"
                      :ref/name ref-name
                      :ref/repo repo-eid
