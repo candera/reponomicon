@@ -16,7 +16,8 @@
            [org.eclipse.jgit.errors MissingObjectException]
            [org.eclipse.jgit.internal.storage.file
             PackIndexWriter
-            PackFile]
+            PackFile
+            PackLock]
            [org.eclipse.jgit.lib
             AbbreviatedObjectId
             AnyObjectId
@@ -40,7 +41,8 @@
            [org.eclipse.jgit.transport
             PackedObjectInfo
             PackParser
-            PackParser$ObjectTypeAndSize]))
+            PackParser$ObjectTypeAndSize]
+           [org.eclipse.jgit.util FS]))
 
 
 (defn not-implemented
@@ -573,20 +575,33 @@
                              (.position (+ offset header-length))))))))
 
         ;; Write the object metadata into Datomic
-        (->> @state
-             :objects
-             (mapcat (fn [[sha {:keys [type data inflated-size]}]]
-                       (object-txdata sha type (or data inflated-size))))
-             (d/transact (:conn metastore))
-             deref)
+        (try
+          (->> @state
+              :objects
+              (mapcat (fn [[sha {:keys [type data inflated-size]}]]
+                        (object-txdata sha type (or data inflated-size))))
+              (d/transact (:conn metastore))
+              deref)
+          (log/trace "Transacted object metadata")
+          (catch Throwable t
+            (log/error t "Error transacting object metadata"
+                       :state @state)
+            (throw t)))
 
-        ;; Get rid of the temp packfile
         (.close temp-pack-file)
-        (.delete temp-file)
+        ;; TODO: Can we get rid of the temp packfile?
+        ;;(.delete temp-file)
 
-        ;; Don't do any locking for now
-        nil
-        ))))
+        (when-let [lock-message (.getLockMessage this)]
+          (log/debug "PackParser.parse" :lock-message lock-message)
+          (let [pack-lock (PackLock. temp-file (FS/detect nil))]
+            (when-not (.lock pack-lock lock-message)
+              (log/error "Could not lock pack file"
+                         :lock-message lock-message)
+              (throw (ex-info "Could not lock pack file"
+                              {:reason       :lock-failure
+                               :lock-message lock-message})))
+            pack-lock))))))
 
 (defn insert-obj
   "Add an object to the repository"
@@ -621,16 +636,6 @@
       (log/debug "ObjectInserter.release")
       )))
 
-(defn- single
-  "Helper function that returns the only thing in a collection. Throws
-  if there is not exactly one."
-  [coll]
-  (or (= 1 (count coll))
-      (throw (ex-info "Collection did not have a single item"
-                      {:reason :collection-not-singular
-                       :coll   coll
-                       :count  (count coll)}))))
-
 (def rules
   '[
     ;; ?descendant descends from ?ancestor iff:
@@ -647,25 +652,44 @@
 
     ;; Object with ?sha is in ?repo iff ?repo contains an object
     ;; reachable through one of its refs with that sha.
-    [(repo-object ?repo ?sha)
+    [(repo-object ?repo ?sha ?obj)
      [?ref :ref/repo ?repo]
      [?ref :ref/target ?target]
      [?obj :object/sha ?sha]
-     [(descends-from? ?target ?obj)]]])
+     (descends-from? ?target ?obj)]])
+
+(defn only
+  "Returns the first element from a collection. Throws if there is
+  more than exactly one element."
+  [coll]
+  (if (next coll)
+    (throw (ex-info "Collection contains more than one element."
+                    {:reason :aint-only
+                     :coll   coll}))
+    (first coll)))
+
+(defn single
+  "Runs the specified query and ensures that it returns a single result."
+  [query & inputs]
+  (-> (apply d/q query inputs)
+      only
+      only))
+
 
 (defn obj-type
   "Return the JGit type of an object given its name."
   [metastore obj-name]
-  (->> (d/q '[:find ?type
-              :in $ % ?repo ?sha
-              :where
-              [(repo-object ?repo ?sha)]
-              [?obj :git/type ?type]]
-            (-> metastore :conn d/db)
-            rules
-            obj-name)
-       single
-       jgit-type))
+  (jgit-type
+   (single '[:find ?type
+             :in $ % ?repo-name ?sha
+             :where
+             [?repo :repo/name ?repo-name]
+             (repo-object ?repo ?sha ?obj)
+             [?obj :object/type ?type]]
+           (-> metastore :conn d/db)
+           rules
+           (:repo-name metastore)
+           obj-name)))
 
 (defn make-object-stream
   "Returns an instance of JGit's ObjectStream over the object named by
@@ -771,62 +795,76 @@
     (newInserter [] (make-object-inserter metastore this))
     (newReader [] (make-object-reader metastore this))))
 
-(defn only
-  "Returns the first element from a collection. Throws if there is
-  more than exactly one element."
-  [coll]
-  (if (next coll)
-    (throw (ex-info "Collection contains more than one element."
-                    {:reason :aint-only
-                     :coll   coll}))
-    (first coll)))
-
 (defn make-ref
-  "Creates and returns a JGit Ref object if it can be found in the
-  metastore. Otherwise, returns nil."
-  [metastore ref-name]
-  (let [r (only
-           (d/q '[:find ?ref
-                  :in $ ?repo-name ?ref-name
-                  :where
-                  [?repo :repo/name ?repo-name]
-                  [?ref :ref/repo ?repo]
-                  [?ref :ref/name ?ref-name]]
-                (-> metastore :conn d/db)
-                (:repo-name metastore)
-                ref-name))]
-    (if-not r
-      nil
-      (proxy [Ref] []
-        (getLeaf [] (not-implemented))
-        (getName [] (not-implemented))
-        (getObjectId [] ;;(when-let [id (:id r)] (ObjectId/fromString id))
-          (not-implemented)
-          )
-        (getPeeledObjectId [] (not-implemented))
-        (getStorage [] (not-implemented))
-        (getTarget [] (not-implemented))
-        (isPeeled [] (not-implemented))
-        (isSymbolic [] (not-implemented))))))
+  "Returns a JGit Ref object given a Datomic ref entity."
+  [r]
+  (proxy [Ref] []
+    (getLeaf []
+      (log/trace "Ref.getLeaf" :ref-name (:ref/name r))
+      ;; For now, don't deal with symbolic refs
+      this)
+    (getName [] (:ref/name r))
+    (getObjectId [] ;;(when-let [id (:id r)] (ObjectId/fromString id))
+      (log/spy :trace
+               (->> r :ref/target :object/sha ObjectId/fromString)))
+    (getPeeledObjectId [] (not-implemented))
+    (getStorage [] (not-implemented))
+    (getTarget [] (not-implemented))
+    (isPeeled [] (not-implemented))
+    (isSymbolic []
+      (log/trace "Ref.isSymbolic" :ref-name (:ref/name r))
+      ;; For now, don't deal with symbolic refs
+      false
+      )))
+
+(defn make-refs
+  "Creates and returns a sequence of JGit Ref objects. If ref-name is
+  supplied limits the results to just that one ref if it can be found
+  in the metastore, or nil if cannot."
+  [metastore & [ref-name]]
+  (let [db       (-> metastore :conn d/db)
+        ref-eids (->> (d/q '[:find ?ref
+                                :in $ ?repo-name
+                                :where
+                                [?repo :repo/name ?repo-name]
+                                [?ref :ref/repo ?repo]]
+                              db
+                              (:repo-name metastore))
+                      (map first))]
+    (log/trace "make-ref" :metastore metastore :ref-name ref-name)
+    (->> ref-eids
+         (map (fn [e] (d/entity db e)))
+         (filter (fn [r] (or (not ref-name)
+                             (= ref-name (:ref/name r)))))
+         (map make-ref))))
 
 (defn make-new-ref
   "Return an instance of Ref that points to `object-id`. The
   referenced object that may not yet exist, in which case `nil` is
   acceptable for `object-id`."
   [ref-name object-id]
+  (log/trace "make-new-ref" :ref-name ref-name :object-id object-id)
   (proxy [Ref] []
-    (getLeaf [] (not-implemented))
+    (getLeaf []
+      (log/trace "Ref.getLeaf" :ref-name ref-name :object-id object-id)
+      ;; For now, don't deal with symbolic refs
+      this)
     (getName [] ref-name)
     (getObjectId [] object-id)
     (getPeeledObjectId [] (not-implemented))
     (getStorage [] (not-implemented))
     (getTarget [] (not-implemented))
     (isPeeled [] (not-implemented))
-    (isSymbolic [] (not-implemented))))
+    (isSymbolic []
+      (log/trace "Ref.isSymbolic" :ref-name ref-name :object-id object-id)
+      ;; For now, don't deal with symbolic refs
+      false
+      )))
 
 (defn make-ref-update
   [metastore ^Repository repo ^RefDatabase ref-db ref-name]
-  (proxy [RefUpdate] [(or (make-ref metastore ref-name)
+  (log/trace "make-ref-update" :ref-name ref-name)
+  (proxy [RefUpdate] [(or (first (make-refs metastore ref-name))
                           (make-new-ref ref-name nil))]
     (doDelete [desired-result] (not-implemented))
     (doLink [target] (not-implemented))
@@ -836,7 +874,14 @@
         (log/debug "RefUpdate.doUpdate"
                    :new-id new-id
                    :old-id old-id
-                   :ref-name ref-name)
+                   :ref-name ref-name
+                   :desired-result desired-result)
+        ;; TODO: I don't really understand how this is supposed to
+        ;; work. Something to do with blowing up if the ref is an
+        ;; unexpected state, perhaps related to concurrency. But it
+        ;; would be nice to handle that at the database level rather
+        ;; than this hoky bullshit.
+        (.setExpectedOldObjectId this old-id)
         (when old-id
           (throw (ex-info "No support yet for changes to existing refs"
                           {:reason :ref-change-not-supported
@@ -864,45 +909,81 @@
                      :ref/name ref-name
                      :ref/repo repo-eid
                      :ref/target object-eid)
-          @(d/transact conn
-                       [{:db/id      (d/tempid :part/refs)
-                         :ref/name   ref-name
-                         :ref/repo   repo-eid
-                         :ref/target object-eid}])))
-      RefUpdate$Result/NEW)
-    (getRefDatabase [] ref-db)
-    (getRepository [] repo)
+          (try
+            @(d/transact conn
+                         [{:db/id      (d/tempid :part/refs)
+                           :ref/name   ref-name
+                           :ref/repo   repo-eid
+                           :ref/target object-eid}])
+            (catch Throwable t
+              (log/error t "Failed to transact ref change"
+                         :ref-name ref-name)
+              (throw t)))))
+      ;; TODO: figure out what the hell this return value ought to be
+      desired-result
+      )
+    (getRefDatabase []
+      (log/trace "RefUpdate.getRefDatabase")
+      ref-db)
+    (getRepository []
+      (log/trace "RefUpdate.getRepository")
+      repo)
     (tryLock [deref?]
-      ;; We handle concurrency in the database and by using a better
-      ;; language, so we should be able to allow concurrent access
-      ;; regardless.
+      (log/trace "Entering RefUpdate.tryLock" :deref? deref?)
+
+      ;; I have no idea why I have to do the following: I copied it
+      ;; from what DfsRefUpdate does:
+
+      ;; dstRef = getRef();
+      ;; if (deref)
+      ;;        dstRef = dstRef.getLeaf();
+
+      ;; if (dstRef.isSymbolic())
+      ;;        setOldObjectId(null);
+      ;; else
+      ;;        setOldObjectId(dstRef.getObjectId());
+
+      ;; return true;
+
+      (let [dest-ref   (.getRef this)
+            target-ref (log/spy :trace (if deref? (.getLeaf dest-ref) dest-ref))]
+        (.setOldObjectId
+         this
+         (log/spy :trace
+                  (if (.isSymbolic target-ref)
+                    nil
+                    (.getObjectId target-ref)))))
+      (log/trace "Exiting RefUpdate.tryLock")
       true)
     (unlock []
+      (log/trace "RefUpdate.unlock (no-op)")
       ;; No-op. Implement if necessary.
       )))
 
 (defn make-ref-map
   "A mutable map of ref names to Ref objects"
   [metastore]
-  (let [ref-data (atom {})]
-   (proxy [java.util.Map] []
-     (clear [] (reset! ref-data {}))
-     (containsKey [k] (contains? @ref-data k))
-     (containsValue [v] (boolean (some #{v} (vals @ref-data))))
-     (entrySet [] (set @ref-data))
-     (get [k] (get @ref-data k))
-     (isEmpty [] (empty? @ref-data))
-     (keySet [] (set (keys @ref-data)))
-     ;; TODO: Do we need to write through to the database when this
-     ;; gets updated?
-     (put [k v] (swap! ref-data assoc k v))
-     (putAll [t] (swap! ref-data merge t))
-     (remove [k] (swap! ref-data dissoc k))
-     (size [] (count @ref-data))
-     ;; When ref-data is empty, vals returns nil, but code calling
-     ;; this doesn't like that very much. So we return an empty
-     ;; collection.
-     (values [] (or (vals @ref-data) [])))))
+  (let [refs (make-refs metastore)
+        ref-map (atom (zipmap (map #(.getName %) refs)
+                              refs))]
+    (proxy [java.util.Map] []
+      (clear [] (not-implemented) (reset! ref-map {}))
+      (containsKey [k] (contains? @ref-map k))
+      (containsValue [v] (boolean (some #{v} (vals @ref-map))))
+      (entrySet [] (set @ref-map))
+      (get [k] (get @ref-map k))
+      (isEmpty [] (empty? @ref-map))
+      (keySet [] (set (keys @ref-map)))
+      ;; TODO: Do we need to write through to the database when this
+      ;; gets updated?
+      (put [k v] (not-implemented) (swap! ref-map assoc k v))
+      (putAll [t] (not-implemented) (swap! ref-map merge t))
+      (remove [k] (not-implemented) (swap! ref-map dissoc k))
+      (size [] (count @ref-map))
+      ;; When ref-map is empty, vals returns nil, but code calling
+      ;; this doesn't like that very much. So we return an empty
+      ;; collection.
+      (values [] (or (vals @ref-map) [])))))
 
 (defn make-ref-database
   [metastore ^Repository repo]
@@ -913,7 +994,8 @@
     (getRef [name]
       (log/debug "RefDatabase.getRef"
                  :name name))
-    (getRefs [prefix] (make-ref-map metastore))
+    (getRefs [prefix]
+      (make-ref-map metastore))
     (isNameConflicting [name]
       ;; TODO: We have to disallow
       ;; refs/heads/master/blah if refs/heads/master already exists,
@@ -969,11 +1051,16 @@
                       :result result)
            result)))))
 
+(defn metastore
+  "Construct a metastore instance."
+  [repo-name datomic]
+  {:conn      (-> datomic :uri d/connect)
+   :repo-name repo-name
+   :obj-store (file-obj-store repo-name)})
+
 (defn ^Repository make-repo
   [repo-name datomic]
-  (let [metastore {:conn      (-> datomic :uri d/connect)
-                   :repo-name repo-name
-                   :obj-store (file-obj-store repo-name)}
+  (let [metastore (metastore repo-name datomic)
         obj-db    (make-object-database metastore)]
     (proxy [Repository] [(mem-repo-builder)]
       (create [bare?] (not-implemented))
