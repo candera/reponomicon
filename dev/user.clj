@@ -146,6 +146,11 @@
   [& options]
   (alter-var-root #'system-instance/system (constantly (apply dev-system options))))
 
+(defn system
+  "Returns the system instance"
+  []
+  system-instance/system)
+
 ;; If desired change this to a vector of options that will get passed
 ;; to dev-system on (reset)
 (def default-options [])
