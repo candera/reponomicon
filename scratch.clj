@@ -189,3 +189,19 @@
       n (.read fis buf)
       data (java.util.Arrays/copyOf buf n)]
   (parse-tree data))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(->> (single '[:find ?ref
+               :in $ ?repo-name ?ref-name
+               :where
+               [?repo :repo/name ?repo-name]
+               [?ref :ref/repo ?repo]
+               [?ref :ref/name ?ref-name]]
+             (db)
+             "bar"
+             "refs/heads/master")
+     (d/entity (db))
+     :ref/target
+     :object/sha
+     ObjectId/fromString)
