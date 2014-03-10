@@ -6,7 +6,7 @@
   :dependencies [[org.clojure/clojure "1.5.1"]
                  [org.clojure/tools.logging "0.2.6"]
 
-                 [com.datomic/datomic-free "0.9.4556"
+                 [com.datomic/datomic-free "0.9.4578"
                   :exclusions [org.slf4j/slf4j-nop
                                org.slf4j/slf4j-log4j12]]
 
