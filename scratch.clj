@@ -205,3 +205,23 @@
      :ref/target
      :object/sha
      ObjectId/fromString)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(def new-sha "33c9b94bee9e336d5e262d68ac88b28e3f222cd6")
+(def old-sha "5fde60faaaa0092581cc589b9d5bdabdef34d63d")
+
+@(d/transact (conn) [[:ref/update "bar" "refs/heads/master" old-sha new-sha]])
+
+(datomic.api/q '[:find ?ref
+                 :in $ ?repo-name ?ref-name ?old-sha
+                 :where
+                 [?repo :repo/name ?repo-name]
+                 [?ref :ref/repo ?repo]
+                 [?ref :ref/name ?ref-name]
+                 [?ref :ref/target ?target]
+                 [?target :object/sha ?old-sha]]
+               (db)
+               "bar"
+               "refs/heads/master"
+               old-sha)

@@ -153,4 +153,39 @@
   ;; I'm not sure we need this one.
   [:user/attr :tree-node/object :ref
    {}
-   "Git object (tree/blob) in a tree node"]]]
+   "Git object (tree/blob) in a tree node"]
+
+  ;; Repo functions
+
+  {:db/ident :ref/update
+   :db/doc "Transaction function that atomically moves ref named by `ref-name`
+  from pointing at `old-sha` to pointing at `new-sha`. If `old-sha` is
+  not the initial value, fails the transaction."
+   :db/id #db/id[:db.part/db]
+   :db/fn #db/fn{:lang :clojure
+                 :params [db repo-name ref-name old-sha new-sha]
+                 :code
+                 (if-let [ref-eid (ffirst
+                                   (datomic.api/q
+                                    '[:find ?ref
+                                      :in $ ?repo-name ?ref-name ?old-sha
+                                      :where
+                                      [?repo :repo/name ?repo-name]
+                                      [?ref :ref/repo ?repo]
+                                      [?ref :ref/name ?ref-name]
+                                      [?ref :ref/target ?target]
+                                      [?target :object/sha ?old-sha]]
+                                    db
+                                    repo-name
+                                    ref-name
+                                    old-sha))]
+                   [[:db/add
+                     ref-eid
+                     :ref/target
+                     (d/entid db [:object/sha new-sha])]]
+                   (throw (ex-info "Ref did not have expected target"
+                                   {:reason    :unexpected-ref-target
+                                    :repo-name repo-name
+                                    :ref-name  ref-name
+                                    :old-sha   old-sha
+                                    :new-sha   new-sha})))}}]]

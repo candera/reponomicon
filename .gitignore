@@ -6,3 +6,5 @@ logs/
 /.nrepl-port
 /.DS_Store
 /.metadata/
+/.idea
+*/.DS_Store

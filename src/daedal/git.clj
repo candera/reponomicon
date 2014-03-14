@@ -408,18 +408,21 @@
 
 (defmulti object-txdata
   "Return transaction data based on object data."
-  (fn [sha type data-or-size] type))
+  (fn [sha type data-or-size tempids db] type))
 
 (defmethod object-txdata :commit
-  [sha type data]
+  [sha type data tempids db]
   (let [{:keys [msg tree parents author authored committer committed]}
         (parse-commit data)]
-    [{:db/id              (d/tempid :part/commits)
+    [{:db/id              (d/tempid :part/commits (tempids sha))
       :object/type        :commit
       :object/sha         sha
       :object/len         (alength data)
       :commit/parents     (->> parents
-                               (map (fn [parent-sha] [:object/sha parent-sha]) parents)
+                               (map (fn [parent-sha]
+                                      (if-let [n (tempids parent-sha)]
+                                        (d/tempid :part/commits n)
+                                        (d/entid db [:object/sha parent-sha]))))
                                set)
       :commit/author      author
       :commit/authoredAt  authored
@@ -427,8 +430,8 @@
       :commit/committedAt committed}]))
 
 (defmethod object-txdata :tree
-  [tree-sha type data]
-  (let [tree-eid (d/tempid :part/trees-and-blobs)]
+  [tree-sha type data tempids db]
+  (let [tree-eid (d/tempid :part/trees-and-blobs (tempids tree-sha))]
     (->> data
          parse-tree
          (mapcat (fn [{:keys [mode path sha]}]
@@ -447,8 +450,8 @@
             :object/len  (alength data)}]))))
 
 (defmethod object-txdata :blob
-  [sha type inflated-size]
-  [{:db/id       (d/tempid :part/trees-and-blobs)
+  [sha type inflated-size tempids db]
+  [{:db/id       (d/tempid :part/trees-and-blobs (tempids sha))
     :object/type :blob
     :object/sha  sha
     :object/len  inflated-size}])
@@ -576,12 +579,19 @@
 
         ;; Write the object metadata into Datomic
         (try
-          (->> @state
-              :objects
-              (mapcat (fn [[sha {:keys [type data inflated-size]}]]
-                        (object-txdata sha type (or data inflated-size))))
-              (d/transact (:conn metastore))
-              deref)
+          (let [objects (:objects @state)
+                tempids (zipmap (map first objects)
+                                (range -1 -1000000 -1))]
+            (->> objects
+                 (mapcat (fn [[sha {:keys [type data inflated-size]}]]
+                           (object-txdata sha
+                                          type
+                                          (or data inflated-size)
+                                          tempids
+                                          (-> metastore :conn d/db))))
+                 (log/spy :trace)
+                 (d/transact (:conn metastore))
+                 deref))
           (log/trace "Transacted object metadata")
           (catch Throwable t
             (log/error t "Error transacting object metadata"
@@ -761,11 +771,10 @@
   [metastore obj-db]
   (proxy [ObjectReader] []
     (getShallowCommits []
-      ;; I'm not sure what shallow commits are, but it looks like they
-      ;; can be turned off.
-      ;;#{}
-      (not-implemented)
-      )
+      ;; I'm not sure what shallow commits are, but the implementation
+      ;;of DfsObjectReader just returns an empty set. We shall do the
+      ;;same.
+      #{})
     (newReader [] (not-implemented))
     (open
       ([^AnyObjectId object-id]
@@ -861,6 +870,46 @@
       false
       )))
 
+(defn add-new-ref
+  [metastore ref-name new-id]
+  ;; Add new-ref
+  (let [conn       (:conn metastore)
+        db         (d/db conn)
+        object-eid (-> (d/q '[:find ?object-eid
+                              :in $ ?object-name
+                              :where
+                              [?object-eid :object/sha ?object-name]]
+                            db
+                            (.getName new-id))
+                       only
+                       only)
+        repo-eid   (-> (d/q '[:find ?repo
+                              :in $ ?repo-name
+                              :where
+                              [?repo :repo/name ?repo-name]]
+                            db
+                            (:repo-name metastore))
+                       only
+                       only)]
+    (log/debug "RefUpdate.doUpdate transacting"
+               :ref/name ref-name
+               :ref/repo repo-eid
+               :ref/target object-eid)
+    @(d/transact conn
+                 [{:db/id      (d/tempid :part/refs)
+                   :ref/name   ref-name
+                   :ref/repo   repo-eid
+                   :ref/target object-eid}])))
+
+(defn update-ref
+  [metastore ref-name old-id new-id]
+  @(d/transact (:conn metastore)
+               [[:ref/update
+                 (:repo-name metastore)
+                 ref-name
+                 (.getName old-id)
+                 (.getName new-id)]]))
+
 (defn make-ref-update
   [metastore ^Repository repo ^RefDatabase ref-db ref-name]
   (log/trace "make-ref-update" :ref-name ref-name)
@@ -869,60 +918,37 @@
     (doDelete [desired-result] (not-implemented))
     (doLink [target] (not-implemented))
     (doUpdate [desired-result]
-      (let [new-id   (.getNewObjectId this)
-            old-id   (.getOldObjectId this)]
-        (log/debug "RefUpdate.doUpdate"
-                   :new-id new-id
-                   :old-id old-id
-                   :ref-name ref-name
-                   :desired-result desired-result)
-        ;; TODO: I don't really understand how this is supposed to
-        ;; work. Something to do with blowing up if the ref is an
-        ;; unexpected state, perhaps related to concurrency. But it
-        ;; would be nice to handle that at the database level rather
-        ;; than this hoky bullshit.
-        (.setExpectedOldObjectId this old-id)
-        (when old-id
-          (throw (ex-info "No support yet for changes to existing refs"
-                          {:reason :ref-change-not-supported
-                           :new-id new-id
-                           :old-id old-id
-                           :ref-name ref-name})))
-        (let [conn       (:conn metastore)
-              object-eid (-> (d/q '[:find ?object-eid
-                                    :in $ ?object-name
-                                    :where
-                                    [?object-eid :object/sha ?object-name]]
-                                  (d/db conn)
-                                  (.getName new-id))
-                             only
-                             only)
-              repo-eid   (-> (d/q '[:find ?repo
-                                    :in $ ?repo-name
-                                    :where
-                                    [?repo :repo/name ?repo-name]]
-                                  (d/db conn)
-                                  (:repo-name metastore))
-                             only
-                             only)]
-          (log/debug "RefUpdate.doUpdate transacting"
-                     :ref/name ref-name
-                     :ref/repo repo-eid
-                     :ref/target object-eid)
-          (try
-            @(d/transact conn
-                         [{:db/id      (d/tempid :part/refs)
-                           :ref/name   ref-name
-                           :ref/repo   repo-eid
-                           :ref/target object-eid}])
-            (catch Throwable t
-              (log/error t "Failed to transact ref change"
-                         :ref-name ref-name)
-              (throw t)))))
-      ;; TODO: figure out what the hell this return value ought to be
-      desired-result
-      )
-    (getRefDatabase []
+      (try
+       (let [new-id   (.getNewObjectId this)
+             old-id   (.getOldObjectId this)]
+         (log/debug "RefUpdate.doUpdate"
+                    :new-id new-id
+                    :old-id old-id
+                    :ref-name ref-name
+                    :desired-result desired-result)
+         ;; TODO: I don't really understand how this is supposed to
+         ;; work. Something to do with blowing up if the ref is an
+         ;; unexpected state, perhaps related to concurrency. But it
+         ;; would be nice to handle that at the database level rather
+         ;; than this hoky bullshit.
+         (.setExpectedOldObjectId this old-id)
+         (when-not (or (= desired-result RefUpdate$Result/FAST_FORWARD)
+                       (and (= desired-result RefUpdate$Result/NEW)
+                            (nil? old-id)))
+           (throw (ex-info "No support for non-fast forward changes"
+                           {:reason   :non-fast-forward
+                            :new-id   new-id
+                            :old-id   old-id
+                            :ref-name ref-name})))
+         (if old-id
+           (update-ref metastore ref-name old-id new-id)
+           (add-new-ref metastore ref-name new-id)))
+       ;; TODO: figure out what the hell this return value ought to be
+       desired-result
+       (catch Throwable t
+         (log/error t "Error in RefUpdate.doUpdate")
+         RefUpdate$Result/LOCK_FAILURE)))
+    (getrefdatabase []
       (log/trace "RefUpdate.getRefDatabase")
       ref-db)
     (getRepository []
