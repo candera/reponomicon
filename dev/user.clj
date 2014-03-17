@@ -11,6 +11,7 @@
             [datomic.api :as d]
             [daedal.common :as com]
             [daedal.datomic :as datomic]
+            [daedal.datomic.schema :as schema]
             [daedal.git :refer :all :as git]
             [daedal.system-instance :as system-instance])
   (:refer-clojure :exclude [methods])
@@ -115,13 +116,9 @@
   [& {:keys [port]
       :or {port 9900}
       :as options}]
-  (let [schema-str (-> "daedal/schema.edn"
-                       io/resource
-                       slurp)
-        schema     (read-string schema-str)
-        schema-id  (com/digest schema-str)
-        datomic    (datomic/temp-peer schema schema-id)
-        jetty      (jetty-server port datomic)]
+  (let [schema  schema/schema
+        datomic (datomic/temp-peer (:txes schema) (:id schema))
+        jetty   (jetty-server port datomic)]
     ;; TODO: If we start to have dependencies, make use of component/using
     (map->DevSystem {:jetty   jetty
                      :datomic datomic

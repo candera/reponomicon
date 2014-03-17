@@ -37,7 +37,7 @@
             Repository
             RepositoryBuilder
             StoredConfig]
-           [org.eclipse.jgit.revwalk RevCommit]
+           [org.eclipse.jgit.revwalk RevCommit RevTag]
            [org.eclipse.jgit.transport
             PackedObjectInfo
             PackParser
@@ -157,7 +157,8 @@
 (def jgit-type
   {:commit Constants/OBJ_COMMIT
    :tree   Constants/OBJ_TREE
-   :blob   Constants/OBJ_BLOB})
+   :blob   Constants/OBJ_BLOB
+   :tag    Constants/OBJ_TAG})
 
 (def daedal-type (zipmap (vals jgit-type) (keys jgit-type)))
 
@@ -354,33 +355,34 @@
                                     :length length}))))))
       (log/debug "Leaving PackParser.parse"))))
 
+(defn ident-info
+  "Given a PersonIdent, return a map with the same info."
+  [ident]
+  {:name (.getName ident)
+   :email (.getEmailAddress ident)
+   :when (.getWhen ident)})
+
 (defn parse-commit
   "Return a structured representation of a commit given its raw bytes."
   [data]
-  (let [text (String. data)
-        trim-email (fn [s] (subs s 1 (dec (count s))))
-        dt (fn [ds] (java.util.Date. (* 1000 (Integer/parseInt ds))))
-        [tree parents author committer msg]
-        (let [lines (str/split text #"\n")
-              slines (mapv #(str/split % #"\s") lines)
-              tree (-> slines (nth 0) (nth 1))
-              [plines xs] (split-with #(= (nth % 0) "parent") (rest slines))]
-          [tree
-           (seq (map second plines))
-           (vec (reverse (first xs)))
-           (vec (reverse (second xs)))
-           (->> lines
-                (drop-while #(not= % ""))
-                rest
-                (interpose "\n")
-                (apply str))])]
-    {:msg msg
-     :tree tree
-     :parents parents
-     :author (trim-email (author 2))
-     :authored (dt (author 1))
-     :committer (trim-email (committer 2))
-     :committed (dt (committer 1))}))
+  (let [c (RevCommit/parse data)
+        committer (.getCommitterIdent c)
+        author (.getAuthorIdent c)]
+   {:msg (.getFullMessage c)
+    :tree (-> c .getTree .getName)
+    :parents (map #(.getName %) (.getParents c))
+    :author (-> c .getAuthorIdent ident-info)
+    :committer (-> c .getCommitterIdent ident-info)}))
+
+(defn parse-tag
+  "Return a structured representation of a tag given its raw bytes."
+  [data]
+  (let [t (RevTag/parse data)
+        ti (.getTaggerIdent t)]
+    {:target-sha (-> t .getObject .getName)
+     :name       (.getTagName t)
+     :tagger     (-> t .getTaggerIdent ident-info)
+     :msg        (.getFullMessage t)}))
 
 (defn format-sha
   "Turn a 20-byte region of a byte array into a string sha."
@@ -412,22 +414,24 @@
 
 (defmethod object-txdata :commit
   [sha type data tempids db]
-  (let [{:keys [msg tree parents author authored committer committed]}
+  (let [{:keys [msg tree parents author committer]}
         (parse-commit data)]
-    [{:db/id              (d/tempid :part/commits (tempids sha))
-      :object/type        :commit
-      :object/sha         sha
-      :object/len         (alength data)
-      :commit/parents     (->> parents
-                               (map (fn [parent-sha]
-                                      (if-let [n (tempids parent-sha)]
-                                        (d/tempid :part/commits n)
-                                        (d/entid db [:object/sha parent-sha]))))
-                               set)
-      :commit/author      author
-      :commit/authoredAt  authored
-      :commit/committer   committer
-      :commit/committedAt committed}]))
+    [{:db/id                  (d/tempid :part/commits (tempids sha))
+      :object/type            :commit
+      :object/sha             sha
+      :object/len             (alength data)
+      :commit/parents         (->> parents
+                                   (map (fn [parent-sha]
+                                          (if-let [n (tempids parent-sha)]
+                                            (d/tempid :part/commits n)
+                                            (d/entid db [:object/sha parent-sha]))))
+                                   set)
+      :commit/author-name     (:name author)
+      :commit/author-email    (:email author)
+      :commit/authored        (:when author)
+      :commit/committer-name  (:name committer)
+      :commit/committer-email (:email committer)
+      :commit/committed       (:when committer)}]))
 
 (defmethod object-txdata :tree
   [tree-sha type data tempids db]
@@ -455,6 +459,26 @@
     :object/type :blob
     :object/sha  sha
     :object/len  inflated-size}])
+
+(defmethod object-txdata :tag
+  [sha type data tempids db]
+  (when (d/entid db [:object/sha sha])
+    (throw (ex-info "No support yet for updating existing tags."
+                    {:reason :updating-tags-not-supported
+                     :sha sha})))
+  (let [{:keys [target-sha tagger name msg]} (parse-tag data)]
+    [{:db/id            (d/tempid :part/tags (tempids sha))
+      :object/type      :tag
+      :object/sha       sha
+      :object/len       (alength data)
+      :tag/target       (if-let [n (tempids target-sha)]
+                          (d/tempid :part/commits n)
+                          (d/entid db [:object/sha target-sha]))
+      :tag/name         name
+      :tag/tagger-name  (:name tagger)
+      :tag/tagger-email (:email tagger)
+      :tag/tagged       (:when tagger)
+      :tag/message      msg}]))
 
 (defn make-jgit-pack-parser
   "This is the JGit-compliant version, which is somewhat insane. Not
@@ -504,7 +528,8 @@
                    :raw raw
                    :pos pos
                    :len len
-                   :string-data (String. raw))
+                   ;:string-data (String. raw)
+                   )
         (.update crc raw pos len))
       (onObjectHeader [src raw pos len]
         (log/debug "onObjectHeader"

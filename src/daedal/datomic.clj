@@ -6,6 +6,7 @@
             [daedal.common :as com]
             [datomic.api :as d :refer (q connect)]))
 
+
 (defn- schema-present?
   "Returns true if the schema identified by `id` has already been
   transacted."
