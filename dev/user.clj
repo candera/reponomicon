@@ -105,8 +105,8 @@
   "Creates an empty repo named `name` in the database."
   [conn repo-name repo-description]
   @(d/transact conn [{:db/id            (d/tempid :part/repos)
-                     :repo/name        repo-name
-                     :repo/description repo-description}]))
+                      :repo/name        repo-name
+                      :repo/description repo-description}]))
 
 (defn dev-system
   "Returns a complete system in :dev mode for development at the REPL.

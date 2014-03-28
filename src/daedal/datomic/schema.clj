@@ -142,6 +142,10 @@
       {:db/unique :db.unique/identity}
       "String form of the git sha, in lower-case hexidecimal."]
 
+     [:user/attr :object/repo :ref
+      {:db/cardinality :db.cardinality/many}
+      "Repos to which this object belongs."]
+
      [:user/attr :object/len :long
       {}
       "Length of the object in bytes."]

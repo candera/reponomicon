@@ -225,3 +225,31 @@
                "bar"
                "refs/heads/master"
                old-sha)
+
+(datomic.api/q '[:find ?obj
+                 :in $ %
+                 :where
+                 [?repo :repo/name ?repo-name]
+                 (repo-object ?repo "8936011878241f782acfdf6d9b646b38fa43b675" ?obj)]
+               (db)
+               rules)
+
+(-> (db) (d/entity [:object/sha "8936011878241f782acfdf6d9b646b38fa43b675"]) d/touch)
+
+(d/q '[:find ?ref-name
+       :where
+       [?ref :ref/target [:object/sha "38e536b334a94e587fa723b397cd8031b2d1220e"]]
+       [?ref :ref/name ?ref-name]]
+     (db))
+
+(->> (d/q '[:find ?commit
+        :where
+        [?commit :commit/parents [:object/sha "8936011878241f782acfdf6d9b646b38fa43b675"]]]
+      (db))
+    ffirst
+    (d/entity (db))
+    d/touch)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+

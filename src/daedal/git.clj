@@ -103,56 +103,6 @@
 ;;            :constructors {[Object] []}
 ;;            :prefix "mem-inserter-")
 
-;; (defn mem-inserter-init
-;;   [db]
-;;   [[] db])
-
-;; (defn mem-inserter-insert
-;;   [type data]
-;;   (not-implemented))
-
-(defprotocol ObjectInfo
-  (get-info [this]))
-
-(extend-protocol ObjectInfo
-  nil
-  (get-info [_] nil)
-
-  RevCommit
-  (get-info [commit]
-    {:message (.getFullMessage commit)
-     :author (-> commit .getAuthorIdent get-info)
-     :committer (-> commit .getCommitterIdent get-info)
-     :commit-time (-> commit .getCommitTime)})
-
-  PersonIdent
-  (get-info [ident]
-    {:name (-> ident .getName)
-     :email (-> ident .getEmailAddress)}))
-
-(defprotocol Bytes
-  (get-bytes [this off len]))
-
-(extend-protocol Bytes
-  (class (byte-array 0))
-  (get-bytes [this off len]
-    (if off
-      (Arrays/copyOfRange ^bytes this ^int off ^int (+ off len))
-      this))
-
-  String
-  (get-bytes [this off len]
-    (when (or off len)
-      (not-implemented))
-    (.getBytes this (java.nio.charset.Charset/forName "UTF-8")))
-
-  ByteArrayInputStream
-  (get-bytes [this off len]
-    (let [off (or off 0)
-          len (or len (.available this))
-          buf (byte-array len)]
-      (.read this buf off len)
-      buf)))
 
 (def jgit-type
   {:commit Constants/OBJ_COMMIT
@@ -161,42 +111,6 @@
    :tag    Constants/OBJ_TAG})
 
 (def daedal-type (zipmap (vals jgit-type) (keys jgit-type)))
-
-(defn obj-len
-  "Returns the length in bytes of object named `obj-name` in `metastore`."
-  [metastore obj-name]
-  (ffirst
-   (d/q '[:find ?len
-          :in $ ?obj-name
-          :where
-          [?e :object/sha ?obj-name]
-          [?e :object/len ?len]]
-        (-> metastore :conn d/db)
-        obj-name)))
-
-(defn obj-exists?
-  "Returns true if an object named `obj-name` exists in `metastore`."
-  [metastore obj-name]
-  (ffirst
-   (d/q '[:find ?e
-          :in $ ?obj-name
-          :where
-          [?e :object/sha ?obj-name]]
-        (-> metastore :conn d/db)
-        obj-name)))
-
-(defn type-partition
-  "Maps a daedal type to the partition where object of that type
-  should live"
-  [type]
-  (or (get {:commit :part/commits
-            :blob   :part/blobs
-            :tag    :part/tags
-            :tree   :part/trees}
-           type)
-      (throw (ex-info "Unable to determine partition for type"
-                      {:reason :no-partition-mapping-defined
-                       :type   type}))))
 
 (defn base-name
   [^File f]
@@ -410,16 +324,17 @@
 
 (defmulti object-txdata
   "Return transaction data based on object data."
-  (fn [sha type data-or-size tempids db] type))
+  (fn [sha type repo-eid data-or-size tempids db] type))
 
 (defmethod object-txdata :commit
-  [sha type data tempids db]
+  [sha type repo-eid data tempids db]
   (let [{:keys [msg tree parents author committer]}
         (parse-commit data)]
     [{:db/id                  (d/tempid :part/commits (tempids sha))
       :object/type            :commit
       :object/sha             sha
       :object/len             (alength data)
+      :object/repo            repo-eid
       :commit/parents         (->> parents
                                    (map (fn [parent-sha]
                                           (if-let [n (tempids parent-sha)]
@@ -434,14 +349,15 @@
       :commit/committed       (:when committer)}]))
 
 (defmethod object-txdata :tree
-  [tree-sha type data tempids db]
+  [tree-sha type repo-eid data tempids db]
   (let [tree-eid (d/tempid :part/trees-and-blobs (tempids tree-sha))]
     (->> data
          parse-tree
          (mapcat (fn [{:keys [mode path sha]}]
                    (let [obj-eid (d/tempid :part/trees-and-blobs)]
-                     [{:db/id      obj-eid
-                       :object/sha sha}
+                     [{:db/id       obj-eid
+                       :object/repo repo-eid
+                       :object/sha  sha}
                       {:db/id            (d/tempid :part/tree-nodes)
                        :tree-node/mode   mode
                        :tree-node/path   path
@@ -451,17 +367,19 @@
           [{:db/id       tree-eid
             :object/type :tree
             :object/sha  tree-sha
-            :object/len  (alength data)}]))))
+            :object/len  (alength data)
+            :object/repo repo-eid}]))))
 
 (defmethod object-txdata :blob
-  [sha type inflated-size tempids db]
+  [sha type repo-eid inflated-size tempids db]
   [{:db/id       (d/tempid :part/trees-and-blobs (tempids sha))
     :object/type :blob
     :object/sha  sha
-    :object/len  inflated-size}])
+    :object/len  inflated-size
+    :object/repo repo-eid}])
 
 (defmethod object-txdata :tag
-  [sha type data tempids db]
+  [sha type repo-eid data tempids db]
   (when (d/entid db [:object/sha sha])
     (throw (ex-info "No support yet for updating existing tags."
                     {:reason :updating-tags-not-supported
@@ -471,6 +389,7 @@
       :object/type      :tag
       :object/sha       sha
       :object/len       (alength data)
+      :object/repo      repo-eid
       :tag/target       (if-let [n (tempids target-sha)]
                           (d/tempid :part/commits n)
                           (d/entid db [:object/sha target-sha]))
@@ -611,6 +530,9 @@
                  (mapcat (fn [[sha {:keys [type data inflated-size]}]]
                            (object-txdata sha
                                           type
+                                          (d/entid
+                                           (d/db (:conn metastore))
+                                           [:repo/name (:repo-name metastore)])
                                           (or data inflated-size)
                                           tempids
                                           (-> metastore :conn d/db))))
@@ -677,21 +599,24 @@
     ;; They are the same
     [(descends-from? ?ancestor ?descendant)
      [(= ?ancestor ?descendant)]]
-    ;; Or ?ancestor is parent of ?descendant
+    ;; Or it's two commits with a parent-child relationship
+    [(descends-from? ?parent ?commit)
+     [?commit :commit/parents ?parent]]
+    ;; Or it's a tree pointed to by a commit
+    [(descends-from? ?commit ?tree)
+     [?commit :commit/tree ?tree]]
+    ;; Or it's an object pointed to by a tree
+    [(descends-from? ?tree ?object)
+     [?tree-node :tree-node/tree ?tree]
+     [?tree-node :tree-node/object ?object]]
+    ;; Or it's connected via a chain of the above
     [(descends-from? ?ancestor ?descendant)
-     [?descendant :commit/parents ?ancestor]]
-    ;; Or ?descendant's parents are descendants of ?ancestor
-    [(descends-from? ?ancestor ?descendant)
-     [?decendant :commit/parents ?parent]
-     (descends-from? ?ancestor ?parent)]
+     (descends-from? ?ancestor ?child)
+     (descends-from? ?child ?descendant)]
 
-    ;; Object with ?sha is in ?repo iff ?repo contains an object
-    ;; reachable through one of its refs with that sha.
     [(repo-object ?repo ?sha ?obj)
-     [?ref :ref/repo ?repo]
-     [?ref :ref/target ?target]
      [?obj :object/sha ?sha]
-     (descends-from? ?target ?obj)]])
+     [?obj :object/repo ?repo]]])
 
 (defn only
   "Returns the first element from a collection. Throws if there is
@@ -710,21 +635,31 @@
       only
       only))
 
+(defn obj-entity
+  "Return the Datomic entity map of an object given its name. Returns
+  nil if the object is not present."
+  [metastore obj-name]
+  (let [db (-> metastore :conn d/db)]
+    (d/entity db
+              (single '[:find ?obj
+                        :in $ % ?repo-name ?sha
+                        :where
+                        [?repo :repo/name ?repo-name]
+                        (repo-object ?repo ?sha ?obj)]
+                      db
+                      rules
+                      (:repo-name metastore)
+                      obj-name))))
 
 (defn obj-type
   "Return the JGit type of an object given its name."
   [metastore obj-name]
-  (jgit-type
-   (single '[:find ?type
-             :in $ % ?repo-name ?sha
-             :where
-             [?repo :repo/name ?repo-name]
-             (repo-object ?repo ?sha ?obj)
-             [?obj :object/type ?type]]
-           (-> metastore :conn d/db)
-           rules
-           (:repo-name metastore)
-           obj-name)))
+  (->> obj-name (obj-entity metastore) :object/type jgit-type))
+
+(defn obj-len
+  "Return the size of an object given its name."
+  [metastore obj-name]
+  (->> obj-name (obj-entity metastore) :object/len))
 
 (defn make-object-stream
   "Returns an instance of JGit's ObjectStream over the object named by
@@ -734,7 +669,7 @@
              :metastore metastore
              :obj-name obj-name)
   (let [store  (:obj-store metastore)
-        _      (or (obj-exists? metastore obj-name)
+        _      (or (obj-entity metastore obj-name)
                    (throw (MissingObjectException.
                            (ObjectId/fromString obj-name)
                            "unknown")))
@@ -771,6 +706,9 @@
         large-object-threshold 1000000
         obj-store              (:obj-store metastore)]
     (proxy [ObjectLoader] []
+      (getSize []
+        (log/trace "ObjectLoader.getSize")
+        (obj-len metastore obj-name))
       (getType []
         (log/trace "ObjectLoader.getType" :id obj-name)
         (obj-type metastore obj-name))
@@ -778,7 +716,7 @@
         ([] (.getCachedBytes ^ObjectLoader this large-object-threshold))
         ([size-limit]
            (cond
-            (not (obj-exists? metastore obj-name))
+            (not (obj-entity metastore obj-name))
             (do
               (log/warn "Couldn't find object"
                         :object-id object-id)
@@ -805,21 +743,26 @@
       ([^AnyObjectId object-id]
          (log/debug "ObjectReader.open" :object-id object-id)
          (.open ^ObjectReader this object-id ObjectReader/OBJ_ANY))
-      ([^AnyObjectId object-id type-hint]
+      ([object-id type-hint]
          (log/debug "ObjectReader.open"
                     :object-id object-id
                     :type-hint type-hint)
-         ;; TODO: This should actually look in the database, not the
-         ;; object store.
+         ;; Bah: I can't overload by type - only arity. So I have to
+         ;; delegate back to the base class if I can tell that this is
+         ;; the other 2-arity overload.
+         (if (instance? Iterable object-id)
+           (proxy-super open ^Iterable object-id ^int type-hint)
+           (do
 
-         ;; TODO: Throw IncorrectObjectTypeException if the object is
-         ;; not of the specified type.
-         (when-not (obj-exists? metastore (.name object-id))
-           (throw (MissingObjectException. (.copy object-id)
-                                           (if (= type-hint ObjectReader/OBJ_ANY)
-                                             "unknown"
-                                             type-hint))))
-         (make-object-loader metastore object-id)))
+             ;; TODO: Throw
+             ;; IncorrectObjectTypeException if the object is not of the
+             ;; specified type.
+             (when-not (obj-entity metastore (.name object-id))
+               (throw (MissingObjectException. (.copy object-id)
+                                               (if (= type-hint ObjectReader/OBJ_ANY)
+                                                 "unknown"
+                                                 type-hint))))
+             (make-object-loader metastore object-id)))))
     (resolve [^AbbreviatedObjectId id] (not-implemented))))
 
 (defn make-object-database
@@ -832,6 +775,7 @@
 (defn make-ref
   "Returns a JGit Ref object given a Datomic ref entity."
   [r]
+  (log/trace "make-ref" :r r)
   (proxy [Ref] []
     (getLeaf []
       (log/trace "Ref.getLeaf" :ref-name (:ref/name r))
@@ -841,10 +785,17 @@
     (getObjectId [] ;;(when-let [id (:id r)] (ObjectId/fromString id))
       (log/spy :trace
                (->> r :ref/target :object/sha ObjectId/fromString)))
-    (getPeeledObjectId [] (not-implemented))
+    (getPeeledObjectId []
+      (if (= :tag (:object/type r))
+        (not-implemented)
+        nil))
     (getStorage [] (not-implemented))
     (getTarget [] (not-implemented))
-    (isPeeled [] (not-implemented))
+    (isPeeled []
+      ;; TODO: revisit this if I ever figure out exactly what a peeled
+      ;; tag is.
+      false
+      )
     (isSymbolic []
       (log/trace "Ref.isSymbolic" :ref-name (:ref/name r))
       ;; For now, don't deal with symbolic refs
@@ -865,7 +816,7 @@
                               db
                               (:repo-name metastore))
                       (map first))]
-    (log/trace "make-ref" :metastore metastore :ref-name ref-name)
+    (log/trace "make-refs" :metastore metastore :ref-name ref-name)
     (->> ref-eids
          (map (fn [e] (d/entity db e)))
          (filter (fn [r] (or (not ref-name)
@@ -1060,7 +1011,11 @@
       ;; TODO: Deal with symbolic refs properly
       (when detach? (not-implemented))
       (make-ref-update metastore repo this name))
-    (peel [ref] (not-implemented))))
+    (peel [ref]
+      ;; I know we're supposed to check for whether or not the thing
+      ;; is peeled, but that doesn't seem to be totally necessary
+      ;; except as a performance enhancement.
+      ref)))
 
 (defn mem-repo-builder
   []
