@@ -782,9 +782,15 @@
       ;; For now, don't deal with symbolic refs
       this)
     (getName [] (:ref/name r))
-    (getObjectId [] ;;(when-let [id (:id r)] (ObjectId/fromString id))
-      (log/spy :trace
-               (->> r :ref/target :object/sha ObjectId/fromString)))
+    (getObjectId []
+      (->> r
+           :ref/target
+           ;; Follow symrefs until we run out
+           (iterate :ref/target)
+           (take-while some?)
+           last
+           :object/sha
+           ObjectId/fromString))
     (getPeeledObjectId []
       (if (= :tag (:object/type r))
         (not-implemented)
@@ -798,9 +804,7 @@
       )
     (isSymbolic []
       (log/trace "Ref.isSymbolic" :ref-name (:ref/name r))
-      ;; For now, don't deal with symbolic refs
-      false
-      )))
+      (-> r :ref/target :ref/name some?))))
 
 (defn make-refs
   "Creates and returns a sequence of JGit Ref objects. If ref-name is
@@ -849,33 +853,17 @@
 (defn add-new-ref
   [metastore ref-name new-id]
   ;; Add new-ref
-  (let [conn       (:conn metastore)
-        db         (d/db conn)
-        object-eid (-> (d/q '[:find ?object-eid
-                              :in $ ?object-name
-                              :where
-                              [?object-eid :object/sha ?object-name]]
-                            db
-                            (.getName new-id))
-                       only
-                       only)
-        repo-eid   (-> (d/q '[:find ?repo
-                              :in $ ?repo-name
-                              :where
-                              [?repo :repo/name ?repo-name]]
-                            db
-                            (:repo-name metastore))
-                       only
-                       only)]
+  (let [conn       (:conn metastore)]
     (log/debug "RefUpdate.doUpdate transacting"
-               :ref/name ref-name
-               :ref/repo repo-eid
-               :ref/target object-eid)
+               :ref-name ref-name
+               :metastore metastore
+               :new-id new-id)
     @(d/transact conn
-                 [{:db/id      (d/tempid :part/refs)
-                   :ref/name   ref-name
-                   :ref/repo   repo-eid
-                   :ref/target object-eid}])))
+                 [[:ref/update
+                   (:repo-name metastore)
+                   ref-name
+                   nil
+                   (.getName new-id)]])))
 
 (defn update-ref
   [metastore ref-name old-id new-id]
@@ -924,7 +912,7 @@
        (catch Throwable t
          (log/error t "Error in RefUpdate.doUpdate")
          RefUpdate$Result/LOCK_FAILURE)))
-    (getrefdatabase []
+    (getRefDatabase []
       (log/trace "RefUpdate.getRefDatabase")
       ref-db)
     (getRepository []
@@ -980,7 +968,13 @@
       ;; gets updated?
       (put [k v] (not-implemented) (swap! ref-map assoc k v))
       (putAll [t] (not-implemented) (swap! ref-map merge t))
-      (remove [k] (not-implemented) (swap! ref-map dissoc k))
+      (remove [k]
+        ;; TODO: Had to implement this one, but still not sure whether
+        ;; we have to write through to the database. I think probably
+        ;; not. I think the reason this collection is mutable is for
+        ;; the convenience of the JGit code, so it can simply remove
+        ;; refs like HEAD that it doesn't want to deal with.
+        (swap! ref-map dissoc k))
       (size [] (count @ref-map))
       ;; When ref-map is empty, vals returns nil, but code calling
       ;; this doesn't like that very much. So we return an empty

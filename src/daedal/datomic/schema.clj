@@ -208,36 +208,61 @@
      {:db/ident :ref/update
       :db/doc "Transaction function that atomically moves ref named by `ref-name`
   from pointing at `old-sha` to pointing at `new-sha`. If `old-sha` is
-  not the initial value, fails the transaction."
+  not the initial value, fails the transaction. A nil value for
+  `old-sha` means that the ref should be created iff it does not
+  already exist."
       :db/id (d/tempid :db.part/db)
       :db/fn (d/function
               '{:lang :clojure
                 :params [db repo-name ref-name old-sha new-sha]
                 :code
-                (if-let [ref-eid (ffirst
-                                  (datomic.api/q
-                                   '[:find ?ref
-                                     :in $ ?repo-name ?ref-name ?old-sha
-                                     :where
-                                     [?repo :repo/name ?repo-name]
-                                     [?ref :ref/repo ?repo]
-                                     [?ref :ref/name ?ref-name]
-                                     [?ref :ref/target ?target]
-                                     [?target :object/sha ?old-sha]]
-                                   db
-                                   repo-name
-                                   ref-name
-                                   old-sha))]
-                  [[:db/add
-                    ref-eid
-                    :ref/target
-                    (d/entid db [:object/sha new-sha])]]
-                  (throw (ex-info "Ref did not have expected target"
-                                  {:reason    :unexpected-ref-target
-                                   :repo-name repo-name
-                                   :ref-name  ref-name
-                                   :old-sha   old-sha
-                                   :new-sha   new-sha})))})}]])
+                (let [entfn   (partial d/entity db)
+                      refs    (->> (d/q
+                                    '[:find ?ref
+                                      :in $ ?repo-name
+                                      :where
+                                      [?repo :repo/name ?repo-name]
+                                      [?ref :ref/repo ?repo]]
+                                    db
+                                    repo-name)
+                                   (map first)
+                                   (map entfn))
+                      ref-map (zipmap (map :ref/name refs)
+                                      refs)
+                      existing-sha (-> ref-map (get ref-name) :ref/target :object/sha)
+                      master (get ref-map "refs/heads/master")
+                      head (get ref-map "HEAD")]
+                  (if (= old-sha existing-sha)
+                    (let [this-ref-eid (or (-> ref-map (get ref-name) :db/id)
+                                           (d/tempid :part/refs))]
+                      (into
+                       ;; If HEAD doesn't already exist, create it.
+                       ;; Target it at master if possible, otherwise a
+                       ;; random ref.
+                       (if head
+                         []
+                         [{:db/id (d/tempid :part/refs)
+                           :ref/repo [:repo/name repo-name]
+                           :ref/name "HEAD"
+                           :ref/target (or (:db/id master)
+                                           (-> ref-map first second :db/id)
+                                           this-ref-eid)}])
+                       (if existing-sha
+                         [[:db/add
+                           this-ref-eid
+                           :ref/target
+                           (d/entid db [:object/sha new-sha])]]
+                         [{:db/id this-ref-eid
+                           :ref/repo [:repo/name repo-name]
+                           :ref/name ref-name
+                           :ref/target [:object/sha new-sha]}])))
+                    (throw (ex-info "Ref did not have expected target"
+                                    {:reason       :unexpected-ref-target
+                                     :repo-name    repo-name
+                                     :ref-name     ref-name
+                                     :old-sha      old-sha
+                                     :existing-sha existing-sha
+                                     :new-sha      new-sha}))))})}]])
 
 (def schema
   {:txes (eval schema-txes)
