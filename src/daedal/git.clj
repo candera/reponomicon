@@ -1,8 +1,13 @@
 (ns daedal.git
   "Implementation of git repo"
+  (:refer-clojure :exclude (proxy))
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
+            [daedal.common
+             :as com
+             :refer (traced-proxy)
+             :rename {traced-proxy proxy}]
             [datomic.api :as d])
   (:import [com.google.common.io
             Files]
@@ -41,9 +46,9 @@
            [org.eclipse.jgit.transport
             PackedObjectInfo
             PackParser
-            PackParser$ObjectTypeAndSize]
+            PackParser$ObjectTypeAndSize
+            PackParser$UnresolvedDelta]
            [org.eclipse.jgit.util FS]))
-
 
 (defn not-implemented
   []
@@ -230,45 +235,6 @@
         (.inflate inflater inflated-buf 0 1)
         (recur)))))
 
-(defn make-pack-parser
-  [metastore ^ObjectDatabase object-database ^InputStream in]
-  (proxy [PackParser] [object-database in]
-    (onAppendBase [type-code data info] (not-implemented))
-    (onBeginOfsDelta [delta-stream-position base-stream-position inflated-size]
-      (not-implemented))
-    (onBeginRefDelta [delta-stream-position base-id inflated-size]
-      (not-implemented))
-    (onBeginWholeObject [stream-position type inflated-size] (not-implemented))
-    (onEndThinPack [] (not-implemented))
-    (onEndWholeObject [^PackedObjectInfo info] (not-implemented))
-    (onInflatedObjectData [^PackedObjectInfo info type-code ^bytes data]
-      (not-implemented))
-    (onObjectData [src raw pos len] (not-implemented))
-    (onObjectHeader [src raw pos len] (not-implemented))
-    (onPackFooter [hash] (not-implemented))
-    (onPackHeader [obj-cnt] (not-implemented))
-    (onStoreStream [raw pos len] (not-implemented))
-    (readDatabase [dst pos cnt] (not-implemented))
-    (seekDatabase [obj-or-delta ^PackParser$ObjectTypeAndSize info] (not-implemented))
-    (parse [^ProgressMonitor receiving
-            ^ProgressMonitor resolving]
-      (log/debug "Entering PackParser.parse")
-      (let [_       (consume-pack-header in)
-            version (read-pack-version in)
-            object-count (read-object-count in)]
-        (dotimes [obj-num object-count]
-          (let [[type length] (read-type-and-length in)]
-            (log/trace "Read object header" :type type :length length)
-            (cond
-             ;; Just skip over it for now - later we'll do something with it
-             (#{:commit :tree :blob} type) (skip-compressed in)
-
-             :else (throw (ex-info "Unsupported object type"
-                                   {:reason :unsupported-object-type
-                                    :type type
-                                    :length length}))))))
-      (log/debug "Leaving PackParser.parse"))))
-
 (defn ident-info
   "Given a PersonIdent, return a map with the same info."
   [ident]
@@ -324,10 +290,10 @@
 
 (defmulti object-txdata
   "Return transaction data based on object data."
-  (fn [sha type repo-eid data-or-size tempids db] type))
+  :type)
 
 (defmethod object-txdata :commit
-  [sha type repo-eid data tempids db]
+  [{:keys [sha type repo-eid data tempids db]}]
   (let [{:keys [msg tree parents author committer]}
         (parse-commit data)]
     [{:db/id                  (d/tempid :part/commits (tempids sha))
@@ -349,8 +315,9 @@
       :commit/committed       (:when committer)}]))
 
 (defmethod object-txdata :tree
-  [tree-sha type repo-eid data tempids db]
-  (let [tree-eid (d/tempid :part/trees-and-blobs (tempids tree-sha))]
+  [{:keys [sha type repo-eid data tempids db]}]
+  (let [tree-sha sha
+        tree-eid (d/tempid :part/trees-and-blobs (tempids tree-sha))]
     (->> data
          parse-tree
          (mapcat (fn [{:keys [mode path sha]}]
@@ -371,7 +338,7 @@
             :object/repo repo-eid}]))))
 
 (defmethod object-txdata :blob
-  [sha type repo-eid inflated-size tempids db]
+  [{:keys [sha type repo-eid inflated-size tempids db]}]
   [{:db/id       (d/tempid :part/trees-and-blobs (tempids sha))
     :object/type :blob
     :object/sha  sha
@@ -379,7 +346,7 @@
     :object/repo repo-eid}])
 
 (defmethod object-txdata :tag
-  [sha type repo-eid data tempids db]
+  [{:keys [sha type repo-eid data tempids db]}]
   (when (d/entid db [:object/sha sha])
     (throw (ex-info "No support yet for updating existing tags."
                     {:reason :updating-tags-not-supported
@@ -408,10 +375,15 @@
         temp-file (File/createTempFile "incoming-" ".pack")
         temp-pack-file (java.io.RandomAccessFile. temp-file "rw")]
     (proxy [PackParser] [object-database in]
+      (checkCRC [old-crc]
+        (-> crc .getValue unchecked-int (= old-crc)))
       (onAppendBase [type-code data info]
         (not-implemented))
       (onBeginOfsDelta [delta-stream-position base-stream-position inflated-size]
-        (not-implemented))
+        (.reset crc))
+      (onEndDelta []
+        (doto (PackParser$UnresolvedDelta.)
+          (.setCRC (unchecked-int (.getValue crc)))))
       (onBeginRefDelta [delta-stream-position base-id inflated-size]
         (not-implemented))
       (onBeginWholeObject [stream-position type inflated-size]
@@ -439,15 +411,20 @@
                    :obj-name (.name info)
                    :data data
                    :len (alength data))
-        (swap! state #(-> %
-                          (assoc-in [:objects (.name info) :data] data))))
+        (swap! state
+               update-in
+               [:objects (.name info)]
+               assoc
+               :data data
+               :type (daedal-type type-code)
+               :inflated-size (alength data)))
       (onObjectData [src raw pos len]
         (log/debug "onObjectData"
                    :src src
                    :raw raw
                    :pos pos
                    :len len
-                   ;:string-data (String. raw)
+                                        ;:string-data (String. raw)
                    )
         (.update crc raw pos len))
       (onObjectHeader [src raw pos len]
@@ -504,13 +481,11 @@
                              offset
                              data]}] (:objects @state)]
           (log/trace "Object found"
+                     :sha sha
                      :inflated-size inflated-size
                      :type type
                      :offset offset
-                     :data (if data (String. data 0 inflated-size) nil))
-          (log/trace "Writing object to object store"
-                     :sha sha
-                     :type type)
+                     :data-type (class data))
           (write-obj (:obj-store metastore)
                      sha
                      (if data
@@ -525,17 +500,20 @@
         (try
           (let [objects (:objects @state)
                 tempids (zipmap (map first objects)
-                                (range -1 -1000000 -1))]
+                                (range -1 -1000000 -1))
+                db (-> metastore :conn d/db)]
             (->> objects
                  (mapcat (fn [[sha {:keys [type data inflated-size]}]]
-                           (object-txdata sha
-                                          type
-                                          (d/entid
-                                           (d/db (:conn metastore))
-                                           [:repo/name (:repo-name metastore)])
-                                          (or data inflated-size)
-                                          tempids
-                                          (-> metastore :conn d/db))))
+                           (object-txdata
+                            {:sha           sha
+                             :type          (or type :blob)
+                             :repo-eid      (d/entid
+                                             db
+                                             [:repo/name (:repo-name metastore)])
+                             :data          data
+                             :inflated-size inflated-size
+                             :tempids       tempids
+                             :db            db})))
                  (log/spy :trace)
                  (d/transact (:conn metastore))
                  deref))
@@ -738,15 +716,11 @@
       ;;of DfsObjectReader just returns an empty set. We shall do the
       ;;same.
       #{})
-    (newReader [] (not-implemented))
+    (newReader [] this)
     (open
       ([^AnyObjectId object-id]
-         (log/debug "ObjectReader.open" :object-id object-id)
          (.open ^ObjectReader this object-id ObjectReader/OBJ_ANY))
       ([object-id type-hint]
-         (log/debug "ObjectReader.open"
-                    :object-id object-id
-                    :type-hint type-hint)
          ;; Bah: I can't overload by type - only arity. So I have to
          ;; delegate back to the base class if I can tell that this is
          ;; the other 2-arity overload.

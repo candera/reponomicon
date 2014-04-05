@@ -253,3 +253,63 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(com/traced-proxy-fn 'Foo '(nm [a b] 3))
+
+(macroexpand-1 '(daedal.common/traced-proxy [Foo IBar] [a b]
+                                (blerg [a] (+ a 2))
+                                (quuxy ([a] (+ a 3))
+                                       ([a b] (- a b)))))
+
+(macroexpand-1 '(daedal.common/traced-proxy [org.eclipse.jgit.transport.PackParser]
+                                          [object-database in]
+    (onAppendBase [type-code data info] (not-implemented))
+    (onBeginOfsDelta [delta-stream-position base-stream-position inflated-size]
+      (not-implemented))))
+
+(daedal.common/traced-proxy [org.eclipse.jgit.transport.PackParser]
+                                          [nil nil]
+    (onAppendBase [type-code data info] (not-implemented))
+    (onBeginOfsDelta [delta-stream-position base-stream-position inflated-size]
+      (not-implemented)))
+
+(clojure.core/proxy
+ [org.eclipse.jgit.transport.PackParser]
+ [nil nil]
+ (onAppendBase
+  ([type-code data info]
+   (clojure.tools.logging/tracef
+    "Entering method"
+    :class
+    org.eclipse.jgit.transport.PackParser
+    :method
+    onAppendBase)
+   (clojure.core/let
+    [result__9107__auto__ (do (not-implemented))]
+    (clojure.tools.logging/tracef
+     "Exiting method"
+     :class
+     org.eclipse.jgit.transport.PackParser
+     :method
+     onAppendBase
+     :result
+     result__9107__auto__)
+    result__9107__auto__)))
+ (onBeginOfsDelta
+  ([delta-stream-position base-stream-position inflated-size]
+   (clojure.tools.logging/tracef
+    "Entering method"
+    :class
+    org.eclipse.jgit.transport.PackParser
+    :method
+    onBeginOfsDelta)
+   (clojure.core/let
+    [result__9107__auto__ (do (not-implemented))]
+    (clojure.tools.logging/tracef
+     "Exiting method"
+     :class
+     org.eclipse.jgit.transport.PackParser
+     :method
+     onBeginOfsDelta
+     :result
+     result__9107__auto__)
+    result__9107__auto__))))
