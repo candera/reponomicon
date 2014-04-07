@@ -378,14 +378,32 @@
       (checkCRC [old-crc]
         (-> crc .getValue unchecked-int (= old-crc)))
       (onAppendBase [type-code data info]
-        (not-implemented))
+        (log/trace "onAppendBase"
+                   :type (daedal-type type-code)
+                   :data-type (class data)
+                   :info info)
+        (swap! state
+               update-in
+               [:objects (.name info)]
+               assoc
+               :type (daedal-type type-code)
+               :data data
+               :inflated-size (alength data))
+        ;; TODO: Returning false here means that this object won't be
+        ;; returned from the .getSortedObjectList() method, but given
+        ;; that we don't really care about the incoming pack file,
+        ;; that seems reasonable, and frees us from having to append
+        ;; the object onto the end of the packfile. Appending it isn't
+        ;; terrible to do, so if this doesn't work we can go that
+        ;; route.
+        false)
       (onBeginOfsDelta [delta-stream-position base-stream-position inflated-size]
         (.reset crc))
       (onEndDelta []
         (doto (PackParser$UnresolvedDelta.)
           (.setCRC (unchecked-int (.getValue crc)))))
       (onBeginRefDelta [delta-stream-position base-id inflated-size]
-        (not-implemented))
+        (.reset crc))
       (onBeginWholeObject [stream-position type inflated-size]
         (log/debug "onBeginWholeObject"
                    :stream-position stream-position
@@ -397,7 +415,9 @@
                           (assoc-in [:current :inflated-size] inflated-size)))
         (.reset crc))
       (onEndThinPack []
-        (not-implemented))
+        ;; We don't care about this event because we're not keeping
+        ;; the resulting pack file.
+        )
       (onEndWholeObject [^PackedObjectInfo info]
         (log/debug "onEndWholeObject" :info info)
         (swap! state #(-> %
