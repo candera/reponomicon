@@ -1,10 +1,10 @@
-(ns daedal.git
+(ns gitomic.git
   "Implementation of git repo"
   (:refer-clojure :exclude (proxy))
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
-            [daedal.common
+            [gitomic.common
              :as com
              :refer (traced-proxy)
              :rename {traced-proxy proxy}]
@@ -95,14 +95,14 @@
 (defn file-obj-store
   [repo-name]
   ;; TODO: Sanitize repo-name
-  (let [obj-dir (io/file "/tmp/daedal/" repo-name)]
+  (let [obj-dir (io/file "/tmp/gitomic/" repo-name)]
     (.mkdirs obj-dir)
     {:obj-dir obj-dir}))
 
 ;; gen-class is another way to do it. This makes interactive
 ;; development a bit weird, though.
 
-;; (gen-class :name daedal.git.MemObjectInserter
+;; (gen-class :name gitomic.git.MemObjectInserter
 ;;            :state state
 ;;            :init "init"
 ;;            :constructors {[Object] []}
@@ -115,7 +115,7 @@
    :blob   Constants/OBJ_BLOB
    :tag    Constants/OBJ_TAG})
 
-(def daedal-type (zipmap (vals jgit-type) (keys jgit-type)))
+(def gitomic-type (zipmap (vals jgit-type) (keys jgit-type)))
 
 (defn base-name
   [^File f]
@@ -283,8 +283,8 @@
         (let [text (String. data start (- i start))
               [mode path] (str/split text #"\s")
               sha (format-sha data (inc i))]
-          (recur (+ i 20)
-                 (+ i 20)
+          (recur (+ i 21)
+                 (+ i 21)
                  (conj entries {:mode mode :path path :sha sha})))
         (recur start (inc i) entries)))))
 
@@ -379,14 +379,14 @@
         (-> crc .getValue unchecked-int (= old-crc)))
       (onAppendBase [type-code data info]
         (log/trace "onAppendBase"
-                   :type (daedal-type type-code)
+                   :type (gitomic-type type-code)
                    :data-type (class data)
                    :info info)
         (swap! state
                update-in
                [:objects (.name info)]
                assoc
-               :type (daedal-type type-code)
+               :type (gitomic-type type-code)
                :data data
                :inflated-size (alength data))
         ;; TODO: Returning false here means that this object won't be
@@ -407,11 +407,11 @@
       (onBeginWholeObject [stream-position type inflated-size]
         (log/debug "onBeginWholeObject"
                    :stream-position stream-position
-                   :type (daedal-type type)
+                   :type (gitomic-type type)
                    :inflated-size inflated-size)
         (swap! state #(-> %
                           (assoc-in [:current :offset] stream-position)
-                          (assoc-in [:current :type] (daedal-type type))
+                          (assoc-in [:current :type] (gitomic-type type))
                           (assoc-in [:current :inflated-size] inflated-size)))
         (.reset crc))
       (onEndThinPack []
@@ -427,7 +427,7 @@
       (onInflatedObjectData [^PackedObjectInfo info type-code ^bytes data]
         (log/debug "onInflatedObjectData"
                    :info info
-                   :type (daedal-type type-code)
+                   :type (gitomic-type type-code)
                    :obj-name (.name info)
                    :data data
                    :len (alength data))
@@ -436,7 +436,7 @@
                [:objects (.name info)]
                assoc
                :data data
-               :type (daedal-type type-code)
+               :type (gitomic-type type-code)
                :inflated-size (alength data)))
       (onObjectData [src raw pos len]
         (log/debug "onObjectData"

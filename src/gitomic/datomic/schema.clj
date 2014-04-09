@@ -1,4 +1,4 @@
-(ns daedal.datomic.schema
+(ns gitomic.datomic.schema
   "Holds database schema"
   (:require [datomic.api :as d]))
 

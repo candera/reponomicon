@@ -1,4 +1,4 @@
-(ns daedal.main
+(ns gitomic.main
   "Entry point when run as an application.")
 
 (defn -main

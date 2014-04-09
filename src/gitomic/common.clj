@@ -1,4 +1,4 @@
-(ns daedal.common
+(ns gitomic.common
   "A wretched hive of scum and villany. I.e. the namespace where we
   put things that don't have a better place."
   (:require [clojure.edn :as edn]

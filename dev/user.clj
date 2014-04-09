@@ -9,11 +9,11 @@
             [clojure.tools.trace :refer (trace-ns)]
             [com.stuartsierra.component :as component]
             [datomic.api :as d]
-            [daedal.common :as com]
-            [daedal.datomic :as datomic]
-            [daedal.datomic.schema :as schema]
-            [daedal.git :refer :all :as git]
-            [daedal.system-instance :as system-instance])
+            [gitomic.common :as com]
+            [gitomic.datomic :as datomic]
+            [gitomic.datomic.schema :as schema]
+            [gitomic.git :refer :all :as git]
+            [gitomic.system-instance :as system-instance])
   (:refer-clojure :exclude [methods])
   (:import [java.io ByteArrayInputStream]
            [org.eclipse.jetty.server Server]
@@ -182,3 +182,14 @@
 (defn methods
   [^Class c]
   (->> c .getMethods (map str) (into [])))
+
+(defn slurp-bytes
+  [path]
+  (let [f (io/file path)
+        len (.length f)
+        barr (byte-array len)]
+    (-> f
+        java.io.FileInputStream.
+        java.io.DataInputStream.
+        (.readFully barr))
+    barr))

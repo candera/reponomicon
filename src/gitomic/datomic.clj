@@ -1,9 +1,9 @@
-(ns daedal.datomic
+(ns gitomic.datomic
   "Functions for working with Datomic."
   (:require [clojure.string :as str]
             [clojure.tools.logging :as log]
             [com.stuartsierra.component :as component]
-            [daedal.common :as com]
+            [gitomic.common :as com]
             [datomic.api :as d :refer (q connect)]))
 
 
