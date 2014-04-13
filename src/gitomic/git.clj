@@ -868,12 +868,34 @@
                  (.getName old-id)
                  (.getName new-id)]]))
 
+(defn delete-ref
+  [metastore ref-name]
+  (let [conn    (:conn metastore)
+        db      (d/db conn)
+        ref-eid (ffirst (d/q '[:find ?ref
+                               :in $ ?ref-name ?repo-name
+                               :where
+                               [?repo :repo/name ?repo-name]
+                               [?ref :ref/repo ?repo]
+                               [?ref :ref/name ?ref-name]]
+                             db
+                             ref-name
+                             (:repo-name metastore)))]
+   @(d/transact (:conn metastore)
+                [[:db.fn/retractEntity ref-eid]])))
+
 (defn make-ref-update
   [metastore ^Repository repo ^RefDatabase ref-db ref-name]
   (log/trace "make-ref-update" :ref-name ref-name)
   (proxy [RefUpdate] [(or (first (make-refs metastore ref-name))
                           (make-new-ref ref-name nil))]
-    (doDelete [desired-result] (not-implemented))
+    (doDelete [desired-result]
+      ;; It's not entirely clear to me whether there's any concurrency
+      ;; protection needed here. I mean, does it much matter if
+      ;; someone else comes along and changes the ref right before you
+      ;; get rid of it? One of you has to win.
+      (delete-ref metastore ref-name)
+      desired-result)
     (doLink [target] (not-implemented))
     (doUpdate [desired-result]
       (try
