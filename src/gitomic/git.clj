@@ -912,10 +912,16 @@
          ;; would be nice to handle that at the database level rather
          ;; than this hoky bullshit.
          (.setExpectedOldObjectId this old-id)
-         (when-not (or (= desired-result RefUpdate$Result/FAST_FORWARD)
+         (when-not (or (= desired-result RefUpdate$Result/FORCED)
+                       (= desired-result RefUpdate$Result/FAST_FORWARD)
                        (and (= desired-result RefUpdate$Result/NEW)
                             (nil? old-id)))
-           (throw (ex-info "No support for non-fast forward changes"
+           (log/error "No support for unforced non-fast forward-changes"
+                      :new-id new-id
+                      :old-id old-id
+                      :ref-name :ref-name
+                      :desired-result desired-result)
+           (throw (ex-info "No support for unforced non-fast forward changes"
                            {:reason   :non-fast-forward
                             :new-id   new-id
                             :old-id   old-id
