@@ -12,7 +12,7 @@
       walk (RevWalk. reader)
       head-id (.resolve repo "HEAD")
       head-commit (.parseCommit walk head-id)
-      _ (.markStart walk head-commit)
+      _> (.markStart walk head-commit)
       ]
   (-> walk first .getTree)
 
@@ -163,7 +163,7 @@
 
 ;; Correct output (type/inflated/compressed)
 ;; :commit 185 122?
-;; :tree 38 
+;; :tree 38
 ;; :blob 3 ??
 
 (let [is (java.io.FileInputStream. "/var/folders/g4/cjxsxcpd4n511t1h5m78m29m0000gn/T/incoming-2978041386142027054.pack")]
@@ -314,3 +314,92 @@
      result__9107__auto__)
     result__9107__auto__))))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; sshd research
+
+(import [org.apache.sshd SshServer]
+        [org.apache.sshd.server Command CommandFactory]
+        [org.apache.sshd.server.command UnknownCommand]
+        [org.apache.sshd.common Factory]
+        [org.apache.sshd.common.channel ChannelOutputStream]
+        [org.apache.sshd.server.keyprovider SimpleGeneratorHostKeyProvider]
+        [org.apache.sshd.server.shell ProcessShellFactory])
+
+
+(def sshd (SshServer/setUpDefaultServer))
+
+(.setPort sshd 2222)
+
+(.setKeyPairProvider sshd (SimpleGeneratorHostKeyProvider. "hostkey.ser"))
+
+;;sshd.setShellFactory(new ProcessShellFactory(new String[] { "/bin/sh", "-i", "-l" }))
+
+(.setShellFactory sshd (ProcessShellFactory. (into-array String ["/bin/sh" "-i" "-l"])))
+(.setShellFactory sshd nil)
+
+(defn foo-command []
+  (let [in (atom nil)
+        out (atom nil)
+        err (atom nil)
+        exit (atom nil)]
+    (reify Command
+      (destroy [this] (log/info "destroy"))
+      (setErrorStream [this err-stream]
+        (log/info "error stream")
+        (when (instance? ChannelOutputStream err-stream)
+          (.setNoDelay err-stream true))
+        (reset! err err-stream))
+      (setExitCallback [this cb]
+        (log/info "callback")
+        (reset! exit cb))
+      (setInputStream [this in-stream]
+        (log/info "input stream")
+        (reset! in in-stream))
+      (setOutputStream [this out-stream]
+        (log/info "output qstream")
+        (when (instance? ChannelOutputStream out-stream)
+          (.setNoDelay out-stream true))
+        (reset! out out-stream))
+      (start [this env] (log/info "start")
+        (binding [*in* (clojure.lang.LineNumberingPushbackReader. (io/reader @in))
+                  *out* (io/writer @out)
+                  *err* (io/writer @err)]
+          (future-call
+           (bound-fn* clojure.main/repl))
+          (comment
+            (println (class @in))
+            (println (class *in*))
+            (println "Hi there: type something")
+            (Thread/sleep 2000)
+            (println "available" (.available @in))
+            ;;(flush)
+            (println "I read: " (.read @in (byte-array 1)))
+            (Thread/sleep 1000)
+            (println "Does this work?")
+            (.onExit exit 0 "Done!"))))
+      )))
+
+(.setCommandFactory sshd (reify CommandFactory
+                          (createCommand [this command]
+                            (if (= command "foo")
+                              (foo-command)
+                              (UnknownCommand. command)))))
+
+(.setCommandFactory sshd (reify CommandFactory
+                          (createCommand [this command]
+                            (UnknownCommand. command))))
+
+(.setShellFactory sshd (reify Factory
+                         (create [this]
+                           (foo-command))))
+
+(.setPasswordAuthenticator sshd (reify org.apache.sshd.server.PasswordAuthenticator
+                                  (authenticate [this username password session] true)))
+
+(.setPublickeyAuthenticator sshd nil)
+
+(.start sshd)
+(.stop sshd)
+
+(count (.getActiveSessions sshd))

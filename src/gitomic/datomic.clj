@@ -60,17 +60,38 @@
   ([conn schema schema-id inst]
      (ensure-schema conn schema schema-id inst)))
 
+(defn create
+  "Creates an entity in the database with `ident` and set `attribute`
+  to the result of calling `f`. If entity already exists, returns the
+  value of `attribute`."
+  [conn ident attribute f]
+  (let [db (d/db conn)
+        ent (d/entity db ident)
+        val (get ent attribute)]
+    (or (get ent attribute)
+        (-> (d/transact conn
+                        [[:gitomic/create
+                          (:db/id ent)
+                          attribute
+                          (f)]])
+            deref
+            :db-after
+            (d/entity ident)
+            (get attribute)))))
+
 ;; Do not create directly; use temp-peer function
 (defrecord TemporaryPeer [uri schema schema-id]
   component/Lifecycle
-  (start [_]
+  (start [this]
     (log/info :STARTING "temporary-peer" :uri uri)
     (d/create-database uri)
     (let [conn (d/connect uri)]
-      (init-db conn schema schema-id)))
-  (stop [_]
+      (init-db conn schema schema-id))
+    this)
+  (stop [this]
     (log/info :STOPPING "temporary-peer" :uri uri)
-    (d/delete-database uri)))
+    (d/delete-database uri)
+    this))
 
 (defn temp-peer
   "Returns an object implementing the Lifecycle protocol for a

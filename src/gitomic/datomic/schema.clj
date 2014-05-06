@@ -262,7 +262,33 @@
                                      :ref-name     ref-name
                                      :old-sha      old-sha
                                      :existing-sha existing-sha
-                                     :new-sha      new-sha}))))})}]])
+                                     :new-sha      new-sha}))))})}]
+
+    [[:user/part :part/ssh-host-keys
+      "Parition for the entity that tracks the SSH host keys"]]
+
+    [
+     ;; A singleton entity representing the SSH host keys has this ident
+     {:db/id (d/tempid :part/ssh-host-keys)
+      :db/ident :gitomic.ssh/host-keys}
+
+     [:user/attr :gitomic.ssh.host-keys/bits :bytes
+      {}
+      "The actual bits of the SSH host-key"]
+
+     {:db/ident :gitomic/create
+      :db/doc "Transact datom but only if it does not already exist. If it does,
+  do nothing."
+      :db/id (d/tempid :db.part/db)
+      :db/fn (d/function
+              '{:lang :clojure
+                :params [db e a v]
+                :code
+                (let [existing (d/entity db e)]
+                  (when-not (get existing a)
+                    [[:db/add e a v]]))})}]
+    ])
+
 
 (def schema
   {:txes (eval schema-txes)

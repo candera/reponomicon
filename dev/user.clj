@@ -13,6 +13,7 @@
             [gitomic.datomic :as datomic]
             [gitomic.datomic.schema :as schema]
             [gitomic.git :refer :all :as git]
+            [gitomic.ssh :as ssh]
             [gitomic.system-instance :as system-instance])
   (:refer-clojure :exclude [methods])
   (:import [java.io ByteArrayInputStream]
@@ -71,26 +72,26 @@
     (.setHandler server context)
     server))
 
+(defrecord JettyServer [port datomic server]
+  component/Lifecycle
+  (start [this]
+    (log/info :STARTING "jetty" :port port)
+    (let [server (create-jetty-server port datomic)]
+      (.start ^Server server)
+      (log/info :STARTED "jetty" :port port)
+      (assoc this :server server)))
+  (stop [this]
+    (log/info :STOPPING "jetty" :port port)
+    (.stop ^Server server)
+    (log/info :STOPPED "jetty" :port port)
+    this))
+
 (defn jetty-server
   "Returns a Lifecycle wrapper around embedded Jetty for development."
-  [port datomic]
-  (let [server (atom nil)]
-    (reify component/Lifecycle
-      (start [_]
-        (when-not @server
-          (log/info :STARTING "jetty" :port port)
-          (reset! server
-                  (create-jetty-server port datomic))
-          (.start ^Server @server)
-          (log/info :STARTED "jetty" :port port)))
-      (stop [_]
-        (when @server
-          (log/info :STOPPING "jetty" :port port)
-          (.stop ^Server @server)
-          (reset! server nil)
-          (log/info :STOPPED "jetty" :port port))))))
+  [port]
+  (map->JettyServer {:port port}))
 
-(def dev-system-components [:jetty :datomic])
+(def dev-system-components [:jetty :datomic :sshd])
 
 ;; Do not create directly; use dev-system function
 ;; options is only here so we can look at it later if we want to.
@@ -113,23 +114,30 @@
   Options are key-value pairs from:
 
       :port        Web server port, default is 9900"
-  [& {:keys [port]
-      :or {port 9900}
+  [& {:keys [http-port ssh-port]
+      :or {http-port 9900
+           ssh-port 9922}
       :as options}]
-  (let [schema  schema/schema
-        datomic (datomic/temp-peer (:txes schema) (:id schema))
-        jetty   (jetty-server port datomic)]
+  (let [schema schema/schema]
     ;; TODO: If we start to have dependencies, make use of component/using
-    (map->DevSystem {:jetty   jetty
-                     :datomic datomic
-                     :options options})))
+    (component/system-map :datomic (datomic/temp-peer (:txes schema) (:id schema))
+                          :jetty (component/using (jetty-server http-port)
+                                                  [:datomic])
+                          :options (or options {})
+                          :sshd (component/using (ssh/server ssh-port)
+                                                 [:datomic]))))
 
 ;;; Access to dev-time datomic database
 
-(defn conn
+(defn datomic
+  "The current datomic instance"
   []
+  (:datomic system-instance/system))
+
+(defn conn
   "A connection to the dev database"
-  (-> system-instance/system :datomic :uri d/connect))
+  []
+  (-> (datomic) :uri d/connect))
 
 (defn db
   "The latest available value of the dev database"

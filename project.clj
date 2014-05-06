@@ -23,6 +23,8 @@
                  [org.eclipse.jetty/jetty-servlet "8.1.9.v20130131"]
                  [javax.servlet/javax.servlet-api "3.0.1"]
 
+                 [org.apache.sshd/sshd-core "0.10.1"]
+
                  ;; [org.slf4j/jcl-over-slf4j "1.7.2"]
                  ;; [org.slf4j/slf4j-api "1.7.2"]
                  ;; [org.slf4j/slf4j-log4j12 "1.6.4"]
