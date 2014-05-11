@@ -49,7 +49,7 @@
                         (open [this req name]
                           (log/debug {:method :repository-resolver/open
                                       :name name})
-                          (make-repo name datomic)))
+                          (make-repo name (-> datomic :uri d/connect))))
         upack-factory (proxy [org.eclipse.jgit.transport.resolver.UploadPackFactory] []
                         (create [req repo]
                           (log/debug {:method :upload-pack-factory/create
@@ -78,11 +78,11 @@
     (log/info :STARTING "jetty" :port port)
     (let [server (create-jetty-server port datomic)]
       (.start ^Server server)
-      (log/info :STARTED "jetty" :port port)
+      (log/info :STARTED "jetty" :port port :server server)
       (assoc this :server server)))
   (stop [this]
-    (log/info :STOPPING "jetty" :port port)
-    (.stop ^Server server)
+    (log/info :STOPPING "jetty" :port port :server server :server (:server this))
+    (.stop ^Server (:server this))
     (log/info :STOPPED "jetty" :port port)
     this))
 
@@ -90,17 +90,6 @@
   "Returns a Lifecycle wrapper around embedded Jetty for development."
   [port]
   (map->JettyServer {:port port}))
-
-(def dev-system-components [:jetty :datomic :sshd])
-
-;; Do not create directly; use dev-system function
-;; options is only here so we can look at it later if we want to.
-(defrecord DevSystem [jetty options datomic]
-  component/Lifecycle
-  (start [this]
-    (component/start-system this dev-system-components))
-  (stop [this]
-    (component/stop-system this dev-system-components)))
 
 (defn create-repo
   "Creates an empty repo named `name` in the database."
@@ -119,7 +108,6 @@
            ssh-port 9922}
       :as options}]
   (let [schema schema/schema]
-    ;; TODO: If we start to have dependencies, make use of component/using
     (component/system-map :datomic (datomic/temp-peer (:txes schema) (:id schema))
                           :jetty (component/using (jetty-server http-port)
                                                   [:datomic])
@@ -165,7 +153,7 @@
   [& options]
   (let [options (or options default-options)]
     (when-not system-instance/system (apply init options)))
-  (component/start system-instance/system)
+  (alter-var-root #'system-instance/system component/start)
   (log/debug "go"
              :uri (-> system-instance/system :datomic :uri))
   (create-repo (conn) "bar" "Test repo")

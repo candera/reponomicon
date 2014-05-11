@@ -14,7 +14,8 @@
            [java.io
             ByteArrayInputStream
             File
-            InputStream]
+            InputStream
+            OutputStream]
            [java.nio ByteBuffer]
            [java.util Arrays]
            [java.util.concurrent ConcurrentHashMap]
@@ -47,7 +48,8 @@
             PackedObjectInfo
             PackParser
             PackParser$ObjectTypeAndSize
-            PackParser$UnresolvedDelta]
+            PackParser$UnresolvedDelta
+            ReceivePack]
            [org.eclipse.jgit.util FS]))
 
 (defn not-implemented
@@ -93,9 +95,8 @@
 ;; File-based object storage
 
 (defn file-obj-store
-  [repo-name]
-  ;; TODO: Sanitize repo-name
-  (let [obj-dir (io/file "/tmp/gitomic/" repo-name)]
+  [base-path]
+  (let [obj-dir (io/file base-path "objects")]
     (.mkdirs obj-dir)
     {:obj-dir obj-dir}))
 
@@ -807,12 +808,12 @@
   [metastore & [ref-name]]
   (let [db       (-> metastore :conn d/db)
         ref-eids (->> (d/q '[:find ?ref
-                                :in $ ?repo-name
-                                :where
-                                [?repo :repo/name ?repo-name]
-                                [?ref :ref/repo ?repo]]
-                              db
-                              (:repo-name metastore))
+                             :in $ ?repo-name
+                             :where
+                             [?repo :repo/name ?repo-name]
+                             [?ref :ref/repo ?repo]]
+                           db
+                           (:repo-name metastore))
                       (map first))]
     (log/trace "make-refs" :metastore metastore :ref-name ref-name)
     (->> ref-eids
@@ -1075,14 +1076,19 @@
 
 (defn metastore
   "Construct a metastore instance."
-  [repo-name datomic]
-  {:conn      (-> datomic :uri d/connect)
+  [repo-name conn]
+  {:conn      conn
    :repo-name repo-name
-   :obj-store (file-obj-store repo-name)})
+   ;; TODO: This should really depend on the repo configuration
+   :obj-store (file-obj-store "/tmp/gitomic")})
 
 (defn ^Repository make-repo
-  [repo-name datomic]
-  (let [metastore (metastore repo-name datomic)
+  [repo-name conn]
+  (or (d/entity (d/db conn) [:repo/name repo-name])
+      (throw (ex-info (str "Could not locate repo " repo-name)
+                      {:reason    ::unknown-repo
+                       :repo-name repo-name})))
+  (let [metastore (metastore repo-name conn)
         obj-db    (make-object-database metastore)]
     (proxy [Repository] [(mem-repo-builder)]
       (create [bare?] (not-implemented))
@@ -1092,3 +1098,9 @@
       (getReflogReader [^String ref-name] (not-implemented))
       (notifyIndexChanged [] (not-implemented))
       (scanForRepoChanges [] (not-implemented)))))
+
+(defn receive-pack
+  "Receives a packfile into `repo` via the specified streams."
+  [^Repository repo ^InputStream in ^OutputStream out ^OutputStream err]
+  (let [rp (ReceivePack. repo)]
+    (.receive rp in out err)))

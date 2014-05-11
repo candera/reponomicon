@@ -1,9 +1,11 @@
 (ns gitomic.ssh
   "Implementation of the git ssh endpoints."
-  (:require [clojure.tools.logging :as log]
+  (:require [clojure.string :as str]
+            [clojure.tools.logging :as log]
             [com.stuartsierra.component :as component]
             [datomic.api :as d]
-            [gitomic.datomic :as datomic])
+            [gitomic.datomic :as datomic]
+            [gitomic.git :as git])
   (:import [java.io
             ByteArrayInputStream
             ByteArrayOutputStream
@@ -18,11 +20,64 @@
            [org.apache.sshd.server.keyprovider SimpleGeneratorHostKeyProvider]
            [org.apache.sshd.server.shell ProcessShellFactory]))
 
+(defn normalize-repo-name
+  "Remove the leading slash and otherwise clean up anything about the
+  incoming repo name that needs to be cleaned up."
+  [r]
+  (if (.startsWith r "/")
+    (subs r 1)
+    r))
+
+(defn git-receive-pack
+  "Runs the receive-pack command"
+  [in out err conn repo-name]
+  (git/receive-pack (git/make-repo (normalize-repo-name repo-name)
+                                   conn)
+                    in out err))
+
+(defn command
+  "Returns an instance of Command that calls f in a future with the
+  input, output, and error streams."
+  [f conn params]
+  (let [state (atom {})]
+   (reify Command
+     (destroy [this] (log/trace "destroy"))
+     (setErrorStream [this err]
+       (log/trace "setErrorStream")
+       (swap! state assoc :err err))
+     (setExitCallback [this cb]
+       (log/trace "setExitCallback")
+       (swap! state assoc :exit-cb cb))
+     (setInputStream [this in]
+       (log/trace "setInputStream")
+       (swap! state assoc :in in))
+     (setOutputStream [this out]
+       (log/trace "setOutputStream")
+       (swap! state assoc :out out))
+     (start [this env]
+       (future
+         (try
+           (apply f (:in @state) (:out @state) (:err @state) conn params)
+           (.onExit (:exit-cb @state) 0)
+           (catch Throwable t
+             (log/error t "Error invoking ssh command")
+             (.onExit (:exit-cb @state) 1 (.getMessage t)))))))))
+
 (defn command-handler
-  "TODO"
-  [command]
-  (throw (ex-info "not yet implemented"
-                  {:reason :not-yet-implemented})))
+  "Bridges from incoming ssh commands to git operations"
+  [conn args]
+  (log/trace "command-handler" :args args)
+  (let [[command-name & params] (as-> args ?
+                                      (str/split ? #"\s")
+                                      (remove str/blank? ?))
+        normalized-params       (map #(str/replace % #"^'(.*)'$" "$1") params)]
+    (log/trace "ssh command received"
+               :command command
+               :params params
+               :normalized-params normalized-params)
+    (case command-name
+      "git-receive-pack" (command git-receive-pack conn normalized-params)
+      (UnknownCommand. args))))
 
 (defn create-ssh-host-keys
   "Returns a byte array that is the serialized form of a freshly generated KeyPair."
@@ -70,7 +125,8 @@
       (.setKeyPairProvider server (datomic-keypair-provider (-> datomic :uri d/connect)))
       (.setCommandFactory server (reify CommandFactory
                                    (createCommand [this command]
-                                     (command-handler command))))
+                                     (log/trace "createCommand" :command command)
+                                     (command-handler conn command))))
       ;; TODO: Switch to publickey authenticator
       (.setPasswordAuthenticator server
                                  (reify PasswordAuthenticator
@@ -85,8 +141,6 @@
   "Returns an object implementing the Lifecycle protocl for an ssh
   server. `options` is a map that can contain the following keys:
 
-  :port - The port to run the ssh server on.
-  :datomic - An instance of a Datomic Lifecycle component."
+  :port - The port to run the ssh server on."
   [port]
   (map->GitomicSshServer {:port port}))
-
