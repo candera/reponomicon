@@ -1074,3 +1074,9 @@
   [^Repository repo ^InputStream in ^OutputStream out ^OutputStream err]
   (let [rp (ReceivePack. repo)]
     (.receive rp in out err)))
+
+(defn upload-pack
+  "Sends a packfile from into `repo` via the specified streams."
+  [^Repository repo ^InputStream in ^OutputStream out ^OutputStream err]
+  (let [up (UploadPack. repo)]
+    (.upload up in out err)))

@@ -35,6 +35,13 @@
                                    conn)
                     in out err))
 
+(defn git-upload-pack
+  "Runs the upload-pack command"
+  [in out err conn repo-name]
+  (git/upload-pack (git/make-repo (normalize-repo-name repo-name)
+                                  conn)
+                   in out err))
+
 (defn command
   "Returns an instance of Command that calls f in a future with the
   input, output, and error streams."
@@ -77,6 +84,7 @@
                :normalized-params normalized-params)
     (case command-name
       "git-receive-pack" (command git-receive-pack conn normalized-params)
+      "git-upload-pack" (command git-upload-pack conn normalized-params)
       (UnknownCommand. args))))
 
 (defn create-ssh-host-keys
