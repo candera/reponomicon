@@ -4,14 +4,14 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
+            [datomic.api :as d]
             [gitomic.common
              :as com
              :refer (traced-proxy)
              :rename {traced-proxy proxy}]
-            [datomic.api :as d])
-  (:import [com.google.common.io
-            Files]
-           [java.io
+            [gitomic.git.object-storage :as storage]
+            [gitomic.git.object-storage.file :as file-store])
+  (:import [java.io
             ByteArrayInputStream
             File
             InputStream
@@ -49,8 +49,11 @@
             PackParser
             PackParser$ObjectTypeAndSize
             PackParser$UnresolvedDelta
-            ReceivePack]
+            ReceivePack
+            UploadPack]
            [org.eclipse.jgit.util FS]))
+
+;;; Misc helper stuff
 
 (defn not-implemented
   []
@@ -59,56 +62,23 @@
 
 ;;; Object storage
 
-;; These next few methods can become the basis for a protocol that can
-;; be extracted once there's more than one place to store objects.
+;; Wrap protocol methods in functions to give us a place to do things
+;; like logging in one place
 
-;; TODO: Consider making the interface asynchronous
+(defn obj-bytes
+  "Return the (potentially cached) bytes of object named `obj-name`."
+  ^bytes [store obj-name]
+  (storage/obj-bytes store obj-name))
 
-(defn- ^File obj-file
-  "Returns a java.io.File pointing to `obj-name` within file store `store`."
-  [file-store obj-name]
-  (-> file-store :obj-dir (io/file obj-name)))
+(defn obj-stream "Return an InputSTream over the object named `obj-name`."
+  ^InputStream [store obj-name]
+  (storage/obj-stream store obj-name))
 
-(defn cached-obj-bytes
-  "Returns the (potentially cached) bytes of object named `obj-name`
-  from `store`."
-  [store obj-name]
-  ;; TODO: Maybe cache
-  (Files/toByteArray (obj-file store obj-name)))
-
-(defn ^InputStream obj-stream
-  "Returns an InputStream over the object named `obj-name`"
-  [store obj-name]
-  (java.io.FileInputStream. (obj-file store obj-name)))
-
-(defn write-obj
-  "Writes an object into the store under the name `obj-name`."
+(defn write-obj "Writes an object into the store under the name `obj-name`."
   [store obj-name ^InputStream data]
-  (let [buf-size 10000
-        buf      (byte-array buf-size)]
-    (with-open [out (java.io.FileOutputStream. (obj-file store obj-name))]
-      (loop [bytes-read (.read data buf 0 buf-size)]
-        (when (pos? bytes-read)
-          (.write out buf 0 bytes-read)
-          (recur (.read data buf 0 buf-size)))))))
+  (storage/write-obj store obj-name data))
 
-;; File-based object storage
-
-(defn file-obj-store
-  [base-path]
-  (let [obj-dir (io/file base-path "objects")]
-    (.mkdirs obj-dir)
-    {:obj-dir obj-dir}))
-
-;; gen-class is another way to do it. This makes interactive
-;; development a bit weird, though.
-
-;; (gen-class :name gitomic.git.MemObjectInserter
-;;            :state state
-;;            :init "init"
-;;            :constructors {[Object] []}
-;;            :prefix "mem-inserter-")
-
+;;; Section title
 
 (def jgit-type
   {:commit Constants/OBJ_COMMIT
@@ -725,7 +695,7 @@
             (throw (org.eclipse.jgit.errors.LargeObjectException. object-id))
 
             :else
-            (cached-obj-bytes obj-store obj-name))))
+            (obj-bytes obj-store obj-name))))
       (openStream []
         (make-object-stream metastore obj-name)))))
 
@@ -1080,7 +1050,7 @@
   {:conn      conn
    :repo-name repo-name
    ;; TODO: This should really depend on the repo configuration
-   :obj-store (file-obj-store "/tmp/gitomic")})
+   :obj-store (file-store/create-store "/tmp/gitomic")})
 
 (defn ^Repository make-repo
   [repo-name conn]
