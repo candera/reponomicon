@@ -16,10 +16,6 @@
 
 (defrecord FileObjectStore [obj-dir]
   storage/ObjectStorage
-  (obj-bytes [store obj-name]
-    ;; TODO: Maybe cache
-    (Files/toByteArray (obj-file store obj-name)))
-
   (obj-stream [store obj-name]
     (FileInputStream. (obj-file store obj-name)))
 

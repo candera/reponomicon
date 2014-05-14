@@ -65,14 +65,15 @@
 ;; Wrap protocol methods in functions to give us a place to do things
 ;; like logging in one place
 
-(defn obj-bytes
-  "Return the (potentially cached) bytes of object named `obj-name`."
-  ^bytes [store obj-name]
-  (storage/obj-bytes store obj-name))
-
 (defn obj-stream "Return an InputSTream over the object named `obj-name`."
   ^InputStream [store obj-name]
   (storage/obj-stream store obj-name))
+
+(defn obj-bytes
+  "Return the (potentially cached) bytes of object named `obj-name`."
+  ^bytes [store obj-name]
+  (with-open [is (obj-stream store obj-name)]
+    (com.google.common.io.ByteStreams/toByteArray is)))
 
 (defn write-obj "Writes an object into the store under the name `obj-name`."
   [store obj-name ^InputStream data]
