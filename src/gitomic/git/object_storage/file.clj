@@ -29,6 +29,8 @@
             (recur (.read data buf 0 buf-size))))))))
 
 (defn create-store
+  "Creates an implementation of `ObjectStorage` over the file system
+  rooted at `base-path`, which should be an absolute path."
   [base-path]
   (let [obj-dir (io/file base-path "objects")]
     (.mkdirs obj-dir)
