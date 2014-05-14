@@ -285,7 +285,8 @@
       :commit/authored        (:when author)
       :commit/committer-name  (:name committer)
       :commit/committer-email (:email committer)
-      :commit/committed       (:when committer)}]))
+      :commit/committed       (:when committer)
+      :commit/message         msg}]))
 
 (defmethod object-txdata :tree
   [{:keys [sha type repo-eid data tempids db]}]
