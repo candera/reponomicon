@@ -10,7 +10,8 @@
              :refer (traced-proxy)
              :rename {traced-proxy proxy}]
             [gitomic.git.object-storage :as storage]
-            [gitomic.git.object-storage.file :as file-store])
+            [gitomic.git.object-storage.file :as file-store]
+            [gitomic.git.object-storage.datomic :as datomic-store])
   (:import [java.io
             ByteArrayInputStream
             File
@@ -1051,7 +1052,9 @@
   {:conn      conn
    :repo-name repo-name
    ;; TODO: This should really depend on the repo configuration
-   :obj-store (file-store/create-store "/tmp/gitomic")})
+   :obj-store ;(file-store/create-store "/tmp/gitomic")
+   (datomic-store/create-store conn)
+   })
 
 (defn ^Repository make-repo
   [repo-name conn]

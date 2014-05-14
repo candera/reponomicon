@@ -403,3 +403,14 @@
 (.stop sshd)
 
 (count (.getActiveSessions sshd))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(->> (d/q '[:find ?e
+            :where [?e :object/bytes]]
+          (db))
+     (map first)
+     (map (partial d/entity (db)))
+     (filter #(#{:commit} (:object/type %)))
+     (map :commit/message)
+     )

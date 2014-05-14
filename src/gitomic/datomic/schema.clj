@@ -150,6 +150,10 @@
       {}
       "Length of the object in bytes."]
 
+     [:user/attr :object/bytes :bytes
+      {}
+      "Actual bytes of an object. Discouraged to use for any but the config repo."]
+
      [:user/attr :commit/parents :ref
       {:db/cardinality :db.cardinality/many}
       "Parents of a commit"]
