@@ -1,11 +1,11 @@
-(ns gitomic.ssh
+(ns reponomicon.ssh
   "Implementation of the git ssh endpoints."
   (:require [clojure.string :as str]
             [clojure.tools.logging :as log]
             [com.stuartsierra.component :as component]
             [datomic.api :as d]
-            [gitomic.datomic :as datomic]
-            [gitomic.git :as git])
+            [reponomicon.datomic :as datomic]
+            [reponomicon.git :as git])
   (:import [java.io
             ByteArrayInputStream
             ByteArrayOutputStream
@@ -107,8 +107,8 @@
   if it's not already present."
   [conn]
   (-> (datomic/create conn
-                      :gitomic.ssh/host-keys
-                      :gitomic.ssh.host-keys/bits
+                      :reponomicon.ssh/host-keys
+                      :reponomicon.ssh.host-keys/bits
                       create-ssh-host-keys)
       ByteArrayInputStream.
       ObjectInputStream.
@@ -128,7 +128,7 @@
     (getKeyTypes [this]
       KeyPairProvider/SSH_DSS)))
 
-(defrecord GitomicSshServer [^SshServer server port datomic]
+(defrecord ReponomiconSshServer [^SshServer server port datomic]
   component/Lifecycle
   (start [this]
     (let [server (SshServer/setUpDefaultServer)
@@ -156,4 +156,4 @@
 
   :port - The port to run the ssh server on."
   [port]
-  (map->GitomicSshServer {:port port}))
+  (map->ReponomiconSshServer {:port port}))

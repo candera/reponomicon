@@ -9,12 +9,12 @@
             [clojure.tools.trace :refer (trace-ns)]
             [com.stuartsierra.component :as component]
             [datomic.api :as d]
-            [gitomic.common :as com]
-            [gitomic.datomic :as datomic]
-            [gitomic.datomic.schema :as schema]
-            [gitomic.git :refer :all :as git]
-            [gitomic.ssh :as ssh]
-            [gitomic.system-instance :as system-instance])
+            [reponomicon.common :as com]
+            [reponomicon.datomic :as datomic]
+            [reponomicon.datomic.schema :as schema]
+            [reponomicon.git :refer :all :as git]
+            [reponomicon.ssh :as ssh]
+            [reponomicon.system-instance :as system-instance])
   (:refer-clojure :exclude [methods])
   (:import [java.io ByteArrayInputStream]
            [org.eclipse.jetty.server Server]

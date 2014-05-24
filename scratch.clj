@@ -30,7 +30,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (refresh)
-(trace-ns 'daedal.git)
+(trace-ns 'reponomicon.git)
 (def mem-db (mem-repo))
 (def repo (first mem-db))
 (add-simple-tree repo "refs/heads/master" "test data")
@@ -184,7 +184,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(let [fis (java.io.FileInputStream. "/tmp/daedal/bar/46a4b264acba7c2e835339e505bf3e91ecf40b39")
+(let [fis (java.io.FileInputStream. "/tmp/reponomicon/bar/46a4b264acba7c2e835339e505bf3e91ecf40b39")
       buf (byte-array 1000)
       n (.read fis buf)
       data (java.util.Arrays/copyOf buf n)]
@@ -255,18 +255,18 @@
 
 (com/traced-proxy-fn 'Foo '(nm [a b] 3))
 
-(macroexpand-1 '(daedal.common/traced-proxy [Foo IBar] [a b]
+(macroexpand-1 '(reponomicon.common/traced-proxy [Foo IBar] [a b]
                                 (blerg [a] (+ a 2))
                                 (quuxy ([a] (+ a 3))
                                        ([a b] (- a b)))))
 
-(macroexpand-1 '(daedal.common/traced-proxy [org.eclipse.jgit.transport.PackParser]
+(macroexpand-1 '(reponomicon.common/traced-proxy [org.eclipse.jgit.transport.PackParser]
                                           [object-database in]
     (onAppendBase [type-code data info] (not-implemented))
     (onBeginOfsDelta [delta-stream-position base-stream-position inflated-size]
       (not-implemented))))
 
-(daedal.common/traced-proxy [org.eclipse.jgit.transport.PackParser]
+(reponomicon.common/traced-proxy [org.eclipse.jgit.transport.PackParser]
                                           [nil nil]
     (onAppendBase [type-code data info] (not-implemented))
     (onBeginOfsDelta [delta-stream-position base-stream-position inflated-size]

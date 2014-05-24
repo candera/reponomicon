@@ -1,17 +1,17 @@
-(ns gitomic.git
+(ns reponomicon.git
   "Implementation of git repo"
   (:refer-clojure :exclude (proxy))
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
             [datomic.api :as d]
-            [gitomic.common
+            [reponomicon.common
              :as com
              :refer (traced-proxy)
              :rename {traced-proxy proxy}]
-            [gitomic.git.object-storage :as storage]
-            [gitomic.git.object-storage.file :as file-store]
-            [gitomic.git.object-storage.datomic :as datomic-store])
+            [reponomicon.git.object-storage :as storage]
+            [reponomicon.git.object-storage.file :as file-store]
+            [reponomicon.git.object-storage.datomic :as datomic-store])
   (:import [java.io
             ByteArrayInputStream
             File
@@ -88,7 +88,7 @@
    :blob   Constants/OBJ_BLOB
    :tag    Constants/OBJ_TAG})
 
-(def gitomic-type (zipmap (vals jgit-type) (keys jgit-type)))
+(def reponomicon-type (zipmap (vals jgit-type) (keys jgit-type)))
 
 (defn base-name
   [^File f]
@@ -353,14 +353,14 @@
         (-> crc .getValue unchecked-int (= old-crc)))
       (onAppendBase [type-code data info]
         (log/trace "onAppendBase"
-                   :type (gitomic-type type-code)
+                   :type (reponomicon-type type-code)
                    :data-type (class data)
                    :info info)
         (swap! state
                update-in
                [:objects (.name info)]
                assoc
-               :type (gitomic-type type-code)
+               :type (reponomicon-type type-code)
                :data data
                :inflated-size (alength data))
         ;; TODO: Returning false here means that this object won't be
@@ -381,11 +381,11 @@
       (onBeginWholeObject [stream-position type inflated-size]
         (log/debug "onBeginWholeObject"
                    :stream-position stream-position
-                   :type (gitomic-type type)
+                   :type (reponomicon-type type)
                    :inflated-size inflated-size)
         (swap! state #(-> %
                           (assoc-in [:current :offset] stream-position)
-                          (assoc-in [:current :type] (gitomic-type type))
+                          (assoc-in [:current :type] (reponomicon-type type))
                           (assoc-in [:current :inflated-size] inflated-size)))
         (.reset crc))
       (onEndThinPack []
@@ -401,7 +401,7 @@
       (onInflatedObjectData [^PackedObjectInfo info type-code ^bytes data]
         (log/debug "onInflatedObjectData"
                    :info info
-                   :type (gitomic-type type-code)
+                   :type (reponomicon-type type-code)
                    :obj-name (.name info)
                    :data data
                    :len (alength data))
@@ -410,7 +410,7 @@
                [:objects (.name info)]
                assoc
                :data data
-               :type (gitomic-type type-code)
+               :type (reponomicon-type type-code)
                :inflated-size (alength data)))
       (onObjectData [src raw pos len]
         (log/debug "onObjectData"
@@ -1053,7 +1053,7 @@
   {:conn      conn
    :repo-name repo-name
    ;; TODO: This should really depend on the repo configuration
-   :obj-store ;(file-store/create-store "/tmp/gitomic")
+   :obj-store ;(file-store/create-store "/tmp/reponomicon")
    (datomic-store/create-store conn)
    })
 

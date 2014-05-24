@@ -1,4 +1,4 @@
-(ns gitomic.main
+(ns reponomicon.main
   "Entry point when run as an application.")
 
 (defn -main

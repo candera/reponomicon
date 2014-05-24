@@ -1,4 +1,4 @@
-(ns gitomic.datomic.schema
+(ns reponomicon.datomic.schema
   "Holds database schema"
   (:require [datomic.api :as d]))
 
@@ -88,7 +88,7 @@
 
      [:user/attr :repo/name :string
       {:db/unique :db.unique/identity}
-      "A git repo uri/name. Something like 'candera/gitomic'."]
+      "A git repo uri/name. Something like 'candera/reponomicon'."]
 
      [:user/attr :repo/description :string
       {}
@@ -274,13 +274,13 @@
     [
      ;; A singleton entity representing the SSH host keys has this ident
      {:db/id (d/tempid :part/ssh-host-keys)
-      :db/ident :gitomic.ssh/host-keys}
+      :db/ident :reponomicon.ssh/host-keys}
 
-     [:user/attr :gitomic.ssh.host-keys/bits :bytes
+     [:user/attr :reponomicon.ssh.host-keys/bits :bytes
       {}
       "The actual bits of the SSH host-key"]
 
-     {:db/ident :gitomic/create
+     {:db/ident :reponomicon/create
       :db/doc "Transact datom but only if it does not already exist. If it does,
   do nothing."
       :db/id (d/tempid :db.part/db)

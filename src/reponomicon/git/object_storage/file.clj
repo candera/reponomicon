@@ -1,7 +1,7 @@
-(ns gitomic.git.object-storage.file
+(ns reponomicon.git.object-storage.file
   "Stores git objects in files"
   (:require [clojure.java.io :as io]
-            [gitomic.git.object-storage :as storage])
+            [reponomicon.git.object-storage :as storage])
   (:import [com.google.common.io Files]
            [java.io
             File

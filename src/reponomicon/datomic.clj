@@ -1,9 +1,9 @@
-(ns gitomic.datomic
+(ns reponomicon.datomic
   "Functions for working with Datomic."
   (:require [clojure.string :as str]
             [clojure.tools.logging :as log]
             [com.stuartsierra.component :as component]
-            [gitomic.common :as com]
+            [reponomicon.common :as com]
             [datomic.api :as d :refer (q connect)]))
 
 
@@ -70,7 +70,7 @@
         val (get ent attribute)]
     (or (get ent attribute)
         (-> (d/transact conn
-                        [[:gitomic/create
+                        [[:reponomicon/create
                           (:db/id ent)
                           attribute
                           (f)]])

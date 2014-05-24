@@ -1,7 +1,7 @@
-(ns gitomic.git.object-storage.datomic
+(ns reponomicon.git.object-storage.datomic
   "Stores git objects in Datomic"
   (:require [datomic.api :as d]
-            [gitomic.git.object-storage :as storage]))
+            [reponomicon.git.object-storage :as storage]))
 
 ;; Obviously, the Datomic store should only be used for very small
 ;; objects. Specifically, we use it for the config repo, since we need

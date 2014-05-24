@@ -1,4 +1,4 @@
-(ns gitomic.git.object-storage
+(ns reponomicon.git.object-storage
   "Abstraction over various ways to store object bytes.")
 
 ;; TODO: Consider making the interface asynchronous

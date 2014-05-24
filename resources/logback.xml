@@ -3,7 +3,7 @@
 
   <!-- Simple file output -->
   <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-    <file>logs/gitomic.log</file>
+    <file>logs/reponomicon.log</file>
 
     <!-- encoder defaults to ch.qos.logback.classic.encoder.PatternLayoutEncoder -->
     <encoder>
@@ -11,7 +11,7 @@
     </encoder>
 
     <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">
-      <fileNamePattern>logs/gitomic.%i.log</fileNamePattern>
+      <fileNamePattern>logs/reponomicon.%i.log</fileNamePattern>
       <minIndex>1</minIndex>
       <maxIndex>3</maxIndex>
     </rollingPolicy>
@@ -47,7 +47,7 @@
 
   <!-- For loggers in the these namespaces, log at all levels. -->
   <logger name="user" level="ALL" />
-  <logger name="gitomic" level="TRACE" />
+  <logger name="reponomicon" level="TRACE" />
   <logger name="org.apache.sshd" level="TRACE" />
   <!-- To log pedestal internals, enable this and change ThresholdFilter to DEBUG
     <logger name="io.pedestal" level="ALL" />

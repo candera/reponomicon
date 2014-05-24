@@ -1,4 +1,4 @@
-(defproject daedal "0.0.1-SNAPSHOT"
+(defproject reponomicon "0.0.1-SNAPSHOT"
   :description "FIXME: write description"
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
@@ -33,7 +33,7 @@
   :global-vars {*warn-on-reflection* true}
   :min-lein-version "2.0.0"
   :resource-paths ["resources"]
-  :main ^{:skip-aot true} daedal.main
+  :main ^{:skip-aot true} reponomicon.main
   :profiles
   {:dev {:dependencies [[org.clojure/tools.namespace "0.2.4"]
                         [org.clojure/tools.trace "0.7.8"]]
