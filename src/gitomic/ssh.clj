@@ -12,7 +12,11 @@
             ObjectInputStream
             ObjectOutputStream]
            [org.apache.sshd SshServer]
-           [org.apache.sshd.server Command CommandFactory PasswordAuthenticator]
+           [org.apache.sshd.server
+            Command
+            CommandFactory
+            PasswordAuthenticator
+            PublickeyAuthenticator]
            [org.apache.sshd.server.command UnknownCommand]
            [org.apache.sshd.common Factory KeyPairProvider]
            [org.apache.sshd.common.channel ChannelOutputStream]
@@ -128,17 +132,18 @@
   component/Lifecycle
   (start [this]
     (let [server (SshServer/setUpDefaultServer)
-          conn   (-> datomic :uri d/connect)]
+          conn   (-> datomic :uri d/connect)
+          user-auth-factories (.getUserAuthFactories server)]
       (.setPort server port)
-      (.setKeyPairProvider server (datomic-keypair-provider (-> datomic :uri d/connect)))
+      (.setKeyPairProvider server (datomic-keypair-provider conn))
       (.setCommandFactory server (reify CommandFactory
                                    (createCommand [this command]
                                      (log/trace "createCommand" :command command)
                                      (command-handler conn command))))
-      ;; TODO: Switch to publickey authenticator
-      (.setPasswordAuthenticator server
-                                 (reify PasswordAuthenticator
-                                   (authenticate [this username password session] true)))
+      ;; TODO: Figure out at what point to only allow certain public keyspe
+      (.setPublickeyAuthenticator server
+                                  (reify PublickeyAuthenticator
+                                    (authenticate [this username key session] true)))
       (.start server)
       (assoc this :server server)))
   (stop [this]

@@ -1,4 +1,4 @@
-() (require '[clojure.test :refer (is)])
+(require '[clojure.test :refer (is)])
 
 (let [repo (mem-repo)
       _ (is (nil? (.resolve repo "HEAD")))
@@ -414,3 +414,12 @@
      (filter #(#{:commit} (:object/type %)))
      (map :commit/message)
      )
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(->> system-instance/system
+    :sshd
+    :server
+    .getUserAuthFactories
+    (map #(.getName %))
+    )
